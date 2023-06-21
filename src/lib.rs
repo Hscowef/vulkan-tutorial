@@ -5,6 +5,9 @@ use ash_window::enumerate_required_extensions;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
+const EXTENSIONS: &[&str] = &[];
+
+#[allow(dead_code)]
 pub struct Application {
     entry: Entry,
     instance: Instance,
@@ -14,9 +17,19 @@ impl Application {
     pub fn new<T>(event_loop: &EventLoop<T>) -> Self {
         let entry = unsafe { Entry::load().unwrap() };
 
-        let extension_names =
+        let winit_extension_names =
             enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
-        let instance = Self::create_instance(&entry, extension_names);
+        let extensions_cstring: Vec<CString> = EXTENSIONS
+            .iter()
+            .map(|&ext| CString::new(ext).unwrap())
+            .collect();
+        let extension_names: Vec<*const i8> = extensions_cstring
+            .iter()
+            .map(|ext| ext.as_ptr())
+            .chain(winit_extension_names.iter().map(|&ext| ext))
+            .collect();
+
+        let instance = Self::create_instance(&entry, &extension_names);
 
         Self { entry, instance }
     }
@@ -38,7 +51,7 @@ impl Application {
         let extensions: Vec<*const i8> =
             extension_names
                 .iter()
-                .map(|&ext| unsafe { dbg!(CStr::from_ptr(ext)) })
+                .map(|&ext| unsafe { CStr::from_ptr(ext) })
                 .filter(|&ext| {
                     avaible_extensions
                     .iter()
@@ -59,7 +72,9 @@ impl Application {
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
     }
 
-    fn main_loop() {}
+    fn _main_loop() {
+        todo!()
+    }
 
     pub fn cleanup(&self) {
         unsafe { self.instance.destroy_instance(None) };
