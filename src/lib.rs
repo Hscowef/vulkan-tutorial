@@ -5,7 +5,7 @@ use ash_window::enumerate_required_extensions;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
-const EXTENSIONS: &[&str] = &[];
+const EXTENSIONS: &[&str] = &["Test"];
 
 #[allow(dead_code)]
 pub struct Application {
@@ -23,18 +23,20 @@ impl Application {
             .iter()
             .map(|&ext| CString::new(ext).unwrap())
             .collect();
-        let extension_names: Vec<*const i8> = extensions_cstring
+        let extension_names = extensions_cstring
             .iter()
             .map(|ext| ext.as_ptr())
-            .chain(winit_extension_names.iter().map(|&ext| ext))
-            .collect();
+            .chain(winit_extension_names.iter().copied());
 
-        let instance = Self::create_instance(&entry, &extension_names);
+        let instance = Self::create_instance(&entry, extension_names);
 
         Self { entry, instance }
     }
 
-    fn create_instance(entry: &Entry, extension_names: &[*const i8]) -> Instance {
+    fn create_instance<T: IntoIterator<Item = *const i8>>(
+        entry: &Entry,
+        extension_names: T,
+    ) -> Instance {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
@@ -50,8 +52,8 @@ impl Application {
         let avaible_extensions = entry.enumerate_instance_extension_properties(None).unwrap();
         let extensions: Vec<*const i8> =
             extension_names
-                .iter()
-                .map(|&ext| unsafe { CStr::from_ptr(ext) })
+                .into_iter()
+                .map(|ext| unsafe { CStr::from_ptr(ext) })
                 .filter(|&ext| {
                     avaible_extensions
                     .iter()
