@@ -38,11 +38,11 @@ impl Application {
         let extensions: Vec<*const i8> =
             extension_names
                 .iter()
-                .map(|ext| unsafe { dbg!(CStr::from_ptr(*ext)) })
-                .filter(|ext| {
+                .map(|&ext| unsafe { dbg!(CStr::from_ptr(ext)) })
+                .filter(|&ext| {
                     avaible_extensions
                     .iter()
-                    .find(|a_ext| unsafe {CStr::from_bytes_until_nul(std::mem::transmute::<&[i8], &[u8]>(&a_ext.extension_name[..])).unwrap()} == *ext)
+                    .find(|a_ext| unsafe {CStr::from_bytes_until_nul(std::mem::transmute::<&[i8], &[u8]>(&a_ext.extension_name[..])).unwrap()} == ext)
                     .or_else(|| {println!("Extension unsupported: {:?} ", ext); None})
                     .is_some()
                 })
