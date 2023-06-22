@@ -45,8 +45,8 @@ impl Application {
         #[cfg(debug_assertions)]
         let layer_names = VALIDATION_LAYERS
             .iter()
-            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap().as_ptr())
-            .collect::<Vec<*const i8>>();
+            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap())
+            .collect::<Vec<&CStr>>();
 
         #[cfg(debug_assertions)]
         let instance = { Self::create_instance(&entry, extension_names, &layer_names) };
@@ -66,10 +66,10 @@ impl Application {
         }
     }
 
-    fn create_instance<'a, T>(
+    fn create_instance<'a, 'b, T>(
         entry: &Entry,
         extension_names: T,
-        #[cfg(debug_assertions)] layer_names: &[*const i8],
+        #[cfg(debug_assertions)] layer_names: &[&'b CStr],
     ) -> Instance
     where
         T: IntoIterator<Item = &'a CStr>,
@@ -102,24 +102,25 @@ impl Application {
             .map(|ext| ext.as_ptr() as *const i8)
             .collect();
 
-        // let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
-        // let mut layers: Option<Vec<*const i8>> = None;
-        // if let Some(names) = layer_names {
-        //     layers = Some(
-        //         names
-        //             .iter()
-        //             .filter(|&&lay| {
-        //                 avaible_layers.iter().find(
-        //                     |&a_lay| unsafe { CStr::from_ptr(a_lay.layer_name.as_ptr()) } == lay,
-        //                 ).or_else(|| {
-        //                     println!("Layer unsupported: {:?} ", lay);
-        //                     None
-        //                 }).is_some()
-        //             })
-        //             .map(|&lay| lay.as_ptr())
-        //             .collect(),
-        //     );
-        // }
+        // Filter out the the layers unsupported by the vulkan instance
+        #[cfg(debug_assertions)]
+        let layers: Vec<*const i8> = {
+            let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
+            layer_names
+                .iter()
+                .filter(|&&lay| {
+                    avaible_layers
+                        .iter()
+                        .find(|&a_lay| unsafe { CStr::from_ptr(a_lay.layer_name.as_ptr()) } == lay)
+                        .or_else(|| {
+                            println!("Layer unsupported: {:?} ", lay);
+                            None
+                        })
+                        .is_some()
+                })
+                .map(|&lay| lay.as_ptr())
+                .collect()
+        };
 
         // Define the vulkan instance create info
         // TODO: Check validation layers avaibility
@@ -131,7 +132,7 @@ impl Application {
         let mut debug_messenger_create_info = Self::debug_messenger_create_info();
         #[cfg(debug_assertions)]
         let create_info = create_info_builder
-            .enabled_layer_names(&layer_names)
+            .enabled_layer_names(&layers)
             .push_next(&mut debug_messenger_create_info)
             .build();
 
@@ -164,8 +165,8 @@ impl Application {
     fn debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
         vk::DebugUtilsMessengerCreateInfoEXT::builder()
             .message_severity(
-                // vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                // | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                // vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE |
+                // vk::DebugUtilsMessageSeverityFlagsEXT::INFO |
                 vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                     | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
             )
