@@ -88,11 +88,6 @@ impl Application {
                 .map(|ext| ext.as_ptr() as *const i8)
                 .collect();
 
-        let create_info = vk::InstanceCreateInfo::builder()
-            .application_info(&app_info)
-            .enabled_extension_names(&extensions)
-            .build();
-
         // Define the vulkan instance create info
         let create_info_builder = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
