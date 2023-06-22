@@ -1,14 +1,15 @@
-use std::{
-    borrow::Borrow,
-    ffi::{CStr, CString},
-};
+use std::ffi::{CStr, CString};
 
 use ash::{vk, Entry, Instance};
 use ash_window::enumerate_required_extensions;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
+#[cfg(debug_assertions)]
+const EXTENSIONS: &[&str] = &["VK_EXT_debug_utils"];
+#[cfg(not(debug_assertions))]
 const EXTENSIONS: &[&str] = &[];
+
 #[cfg(debug_assertions)]
 const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
 
