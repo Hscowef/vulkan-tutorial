@@ -22,6 +22,7 @@ const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
 pub struct Application {
     _entry: Entry,
     instance: Instance,
+    physical_device: vk::PhysicalDevice,
 
     #[cfg(debug_assertions)]
     debug_util_ext: ext::DebugUtils,
@@ -57,9 +58,13 @@ impl Application {
         #[cfg(debug_assertions)]
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
+        let physical_device = Self::pick_physical_device(&instance);
+
         Self {
             _entry: entry,
             instance,
+            physical_device,
+
             #[cfg(debug_assertions)]
             debug_util_ext,
             #[cfg(debug_assertions)]
@@ -138,6 +143,21 @@ impl Application {
 
         // Create the instance
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
+    }
+
+    fn pick_physical_device(instance: &Instance) -> vk::PhysicalDevice {
+        let physical_devices = unsafe { instance.enumerate_physical_devices().unwrap() };
+        physical_devices
+            .into_iter()
+            .find(|&device| Self::is_device_suitable(instance, device))
+            .unwrap()
+    }
+
+    fn is_device_suitable(instance: &Instance, device: vk::PhysicalDevice) -> bool {
+        let _device_proprieties = unsafe { instance.get_physical_device_properties(device) };
+        let _device_features = unsafe { instance.get_physical_device_features(device) };
+
+        true
     }
 
     #[cfg(debug_assertions)]
