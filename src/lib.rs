@@ -20,7 +20,7 @@ const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
 
 #[allow(dead_code)]
 pub struct Application {
-    entry: Entry,
+    _entry: Entry,
     instance: Instance,
 
     #[cfg(debug_assertions)]
@@ -58,7 +58,7 @@ impl Application {
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
         Self {
-            entry,
+            _entry: entry,
             instance,
             #[cfg(debug_assertions)]
             debug_util_ext,
@@ -121,7 +121,6 @@ impl Application {
         };
 
         // Define the vulkan instance create info
-        // TODO: Check validation layers avaibility
         let create_info_builder = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&extensions);
