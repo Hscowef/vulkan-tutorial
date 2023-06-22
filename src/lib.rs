@@ -6,12 +6,12 @@ use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
 #[cfg(debug_assertions)]
-const EXTENSIONS: &[&str] = &["VK_EXT_debug_utils"];
+const EXTENSIONS: &[&[u8]] = &[b"VK_EXT_debug_utils\0"];
 #[cfg(not(debug_assertions))]
-const EXTENSIONS: &[&str] = &[];
+const EXTENSIONS: &[&[u8]] = &[];
 
 #[cfg(debug_assertions)]
-const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
+const VALIDATION_LAYERS: &[&[u8]] = &[b"VK_LAYER_KHRONOS_validation\0"];
 
 #[allow(dead_code)]
 pub struct Application {
@@ -25,24 +25,19 @@ impl Application {
 
         let winit_extension_names =
             enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
-        let extensions_cstring: Vec<CString> = EXTENSIONS
+        let extension_names = EXTENSIONS
             .iter()
-            .map(|&ext| CString::new(ext).unwrap())
-            .collect();
-        let extension_names = extensions_cstring
-            .iter()
-            .map(|ext| ext.as_ptr())
-            .chain(winit_extension_names.iter().copied());
+            .map(|&ext| CStr::from_bytes_with_nul(ext).unwrap())
+            .chain(
+                winit_extension_names
+                    .iter()
+                    .map(|&ext| unsafe { CStr::from_ptr(ext) }),
+            );
 
         #[cfg(debug_assertions)]
-        let layers_cstring: Vec<CString> = VALIDATION_LAYERS
+        let layer_name_temp = VALIDATION_LAYERS
             .iter()
-            .map(|&ext| CString::new(ext).unwrap())
-            .collect();
-        #[cfg(debug_assertions)]
-        let layer_name_temp = layers_cstring
-            .iter()
-            .map(|lay| lay.as_ptr())
+            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap().as_ptr())
             .collect::<Vec<*const i8>>();
 
         #[cfg(debug_assertions)]
@@ -54,13 +49,13 @@ impl Application {
         Self { entry, instance }
     }
 
-    fn create_instance<T>(
+    fn create_instance<'a, T>(
         entry: &Entry,
         extension_names: T,
         layer_names: Option<&[*const i8]>,
     ) -> Instance
     where
-        T: IntoIterator<Item = *const i8>,
+        T: IntoIterator<Item = &'a CStr>,
     {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
@@ -75,21 +70,42 @@ impl Application {
 
         // Filter out the the extensions unsupported by the vulkan instance
         let avaible_extensions = entry.enumerate_instance_extension_properties(None).unwrap();
-        let extensions: Vec<*const i8> =
-            extension_names
-                .into_iter()
-                .map(|ext| unsafe { CStr::from_ptr(ext) })
-                .filter(|&ext| {
-                    avaible_extensions
+        let extensions: Vec<*const i8> = extension_names
+            .into_iter()
+            .filter(|&ext| {
+                avaible_extensions
                     .iter()
-                    .find(|a_ext| unsafe {CStr::from_bytes_until_nul(std::mem::transmute::<&[i8], &[u8]>(&a_ext.extension_name[..])).unwrap()} == ext)
-                    .or_else(|| {println!("Extension unsupported: {:?} ", ext); None})
+                    .find(|&a_ext| unsafe { CStr::from_ptr(a_ext.extension_name.as_ptr()) } == ext)
+                    .or_else(|| {
+                        println!("Extension unsupported: {:?} ", ext);
+                        None
+                    })
                     .is_some()
-                })
-                .map(|ext| ext.as_ptr() as *const i8)
-                .collect();
+            })
+            .map(|ext| ext.as_ptr() as *const i8)
+            .collect();
+
+        // let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
+        // let mut layers: Option<Vec<*const i8>> = None;
+        // if let Some(names) = layer_names {
+        //     layers = Some(
+        //         names
+        //             .iter()
+        //             .filter(|&&lay| {
+        //                 avaible_layers.iter().find(
+        //                     |&a_lay| unsafe { CStr::from_ptr(a_lay.layer_name.as_ptr()) } == lay,
+        //                 ).or_else(|| {
+        //                     println!("Layer unsupported: {:?} ", lay);
+        //                     None
+        //                 }).is_some()
+        //             })
+        //             .map(|&lay| lay.as_ptr())
+        //             .collect(),
+        //     );
+        // }
 
         // Define the vulkan instance create info
+        // TODO: Check validation layers avaibility
         let create_info_builder = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&extensions);
@@ -102,6 +118,9 @@ impl Application {
         // Create the instance
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
     }
+
+    #[cfg(debug_assertions)]
+    fn setup_debug_messenger() {}
 
     fn _main_loop() {
         todo!()
