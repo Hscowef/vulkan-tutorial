@@ -1,11 +1,14 @@
-use std::ffi::{CStr, CString};
+use std::{
+    borrow::Borrow,
+    ffi::{CStr, CString},
+};
 
 use ash::{vk, Entry, Instance};
 use ash_window::enumerate_required_extensions;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
-const EXTENSIONS: &[&str] = &["Test"];
+const EXTENSIONS: &[&str] = &[];
 #[cfg(debug_assertions)]
 const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
 
@@ -30,31 +33,33 @@ impl Application {
             .map(|ext| ext.as_ptr())
             .chain(winit_extension_names.iter().copied());
 
-        #[cfg(not(debug_assertions))]
-        let instance = Self::create_instance(&entry, extension_names);
-
         #[cfg(debug_assertions)]
         let layers_cstring: Vec<CString> = VALIDATION_LAYERS
             .iter()
             .map(|&ext| CString::new(ext).unwrap())
             .collect();
         #[cfg(debug_assertions)]
-        let instance = {
-            let layer_names = layers_cstring.iter().map(|ext| ext.as_ptr());
-            Self::create_instance(&entry, extension_names, layer_names)
-        };
+        let layer_name_temp = layers_cstring
+            .iter()
+            .map(|lay| lay.as_ptr())
+            .collect::<Vec<*const i8>>();
 
+        #[cfg(debug_assertions)]
+        let layer_names = Some(&*layer_name_temp);
+        #[cfg(not(debug_assertions))]
+        let layer_names = None;
+
+        let instance = { Self::create_instance(&entry, extension_names, layer_names) };
         Self { entry, instance }
     }
 
-    fn create_instance<T, U>(
+    fn create_instance<T>(
         entry: &Entry,
         extension_names: T,
-        #[cfg(debug_assertions)] layer_names: U,
+        layer_names: Option<&[*const i8]>,
     ) -> Instance
     where
         T: IntoIterator<Item = *const i8>,
-        U: IntoIterator<Item = *const i8>,
     {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
@@ -83,11 +88,20 @@ impl Application {
                 .map(|ext| ext.as_ptr() as *const i8)
                 .collect();
 
-        // Define the vulkan instance create info
         let create_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&extensions)
             .build();
+
+        // Define the vulkan instance create info
+        let create_info_builder = vk::InstanceCreateInfo::builder()
+            .application_info(&app_info)
+            .enabled_extension_names(&extensions);
+
+        let create_info = match layer_names {
+            Some(names) => create_info_builder.enabled_layer_names(&names).build(),
+            None => create_info_builder.build(),
+        };
 
         // Create the instance
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
