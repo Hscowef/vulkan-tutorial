@@ -1,6 +1,8 @@
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString};
 
-use ash::{extensions::ext, vk, Entry, Instance};
+#[cfg(debug_assertions)]
+use ash::extensions::ext;
+use ash::{vk, Entry, Instance};
 use ash_window::enumerate_required_extensions;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
@@ -45,11 +47,10 @@ impl Application {
         #[cfg(debug_assertions)]
         let layer_names = VALIDATION_LAYERS
             .iter()
-            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap())
-            .collect::<Vec<&CStr>>();
+            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap());
 
         #[cfg(debug_assertions)]
-        let instance = { Self::create_instance(&entry, extension_names, &layer_names) };
+        let instance = { Self::create_instance(&entry, extension_names, layer_names) };
         #[cfg(not(debug_assertions))]
         let instance = { Self::create_instance(&entry, extension_names) };
 
@@ -66,14 +67,11 @@ impl Application {
         }
     }
 
-    fn create_instance<'a, 'b, T>(
+    fn create_instance<'a, 'b>(
         entry: &Entry,
-        extension_names: T,
-        #[cfg(debug_assertions)] layer_names: &[&'b CStr],
-    ) -> Instance
-    where
-        T: IntoIterator<Item = &'a CStr>,
-    {
+        extension_names: impl IntoIterator<Item = &'a CStr>,
+        #[cfg(debug_assertions)] layer_names: impl IntoIterator<Item = &'b CStr>,
+    ) -> Instance {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
@@ -107,8 +105,8 @@ impl Application {
         let layers: Vec<*const i8> = {
             let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
             layer_names
-                .iter()
-                .filter(|&&lay| {
+                .into_iter()
+                .filter(|&lay| {
                     avaible_layers
                         .iter()
                         .find(|&a_lay| unsafe { CStr::from_ptr(a_lay.layer_name.as_ptr()) } == lay)
@@ -118,7 +116,7 @@ impl Application {
                         })
                         .is_some()
                 })
-                .map(|&lay| lay.as_ptr())
+                .map(|lay| lay.as_ptr())
                 .collect()
         };
 
@@ -184,7 +182,7 @@ impl Application {
         message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
         _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
         p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-        _p_user_data: *mut c_void,
+        _p_user_data: *mut std::ffi::c_void,
     ) -> vk::Bool32 {
         if message_severity >= LAYER_SEVERITY {
             let message = unsafe { CStr::from_ptr((*p_callback_data).p_message) };
