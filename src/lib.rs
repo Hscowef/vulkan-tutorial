@@ -1,3 +1,7 @@
+mod queue_families;
+
+use crate::queue_families::QueueFamilyIndice;
+
 use std::ffi::{CStr, CString};
 
 #[cfg(debug_assertions)]
@@ -154,10 +158,28 @@ impl Application {
     }
 
     fn is_device_suitable(instance: &Instance, device: vk::PhysicalDevice) -> bool {
-        let _device_proprieties = unsafe { instance.get_physical_device_properties(device) };
-        let _device_features = unsafe { instance.get_physical_device_features(device) };
+        // let _device_proprieties = unsafe { instance.get_physical_device_properties(device) };
+        // let _device_features = unsafe { instance.get_physical_device_features(device) };
+        let indices = Self::find_queue_families(instance, device);
+        indices.is_complete()
+    }
 
-        true
+    fn find_queue_families(instance: &Instance, device: vk::PhysicalDevice) -> QueueFamilyIndice {
+        let queue_families =
+            unsafe { instance.get_physical_device_queue_family_properties(device) };
+
+        let mut indices = QueueFamilyIndice::default();
+        for (i, family) in queue_families.iter().enumerate() {
+            if indices.is_complete() {
+                break;
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                indices.graphics_family = Some(i)
+            }
+        }
+
+        indices
     }
 
     #[cfg(debug_assertions)]
