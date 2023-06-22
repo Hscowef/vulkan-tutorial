@@ -8,6 +8,7 @@ use std::ffi::{CStr, CString};
 use ash::extensions::ext;
 use ash::{vk, Entry, Instance};
 use ash_window::enumerate_required_extensions;
+use colored::Colorize;
 use raw_window_handle::HasRawDisplayHandle;
 use winit::event_loop::EventLoop;
 
@@ -94,40 +95,42 @@ impl Application {
 
         // Filter out the the extensions unsupported by the vulkan instance
         let avaible_extensions = entry.enumerate_instance_extension_properties(None).unwrap();
-        let extensions: Vec<*const i8> = extension_names
-            .into_iter()
-            .filter(|&ext| {
-                avaible_extensions
+        let extensions: Vec<*const i8> =
+            extension_names
+                .into_iter()
+                .filter(|&ext| {
+                    avaible_extensions
                     .iter()
                     .find(|&a_ext| unsafe { CStr::from_ptr(a_ext.extension_name.as_ptr()) } == ext)
                     .or_else(|| {
-                        println!("Extension unsupported: {:?} ", ext);
+                        println!("{} {:?} ", "Extension unsupported:".truecolor(255, 172, 28), ext);
                         None
                     })
                     .is_some()
-            })
-            .map(|ext| ext.as_ptr() as *const i8)
-            .collect();
+                })
+                .map(|ext| ext.as_ptr() as *const i8)
+                .collect();
 
         // Filter out the the layers unsupported by the vulkan instance
         #[cfg(debug_assertions)]
-        let layers: Vec<*const i8> = {
-            let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
-            layer_names
-                .into_iter()
-                .filter(|&lay| {
-                    avaible_layers
+        let layers: Vec<*const i8> =
+            {
+                let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
+                layer_names
+                    .into_iter()
+                    .filter(|&lay| {
+                        avaible_layers
                         .iter()
                         .find(|&a_lay| unsafe { CStr::from_ptr(a_lay.layer_name.as_ptr()) } == lay)
                         .or_else(|| {
-                            println!("Layer unsupported: {:?} ", lay);
+                            println!("{} {:?} ","Layer unsupported:".truecolor(255, 172, 28), lay);
                             None
                         })
                         .is_some()
-                })
-                .map(|lay| lay.as_ptr())
-                .collect()
-        };
+                    })
+                    .map(|lay| lay.as_ptr())
+                    .collect()
+            };
 
         // Define the vulkan instance create info
         let create_info_builder = vk::InstanceCreateInfo::builder()
@@ -227,7 +230,11 @@ impl Application {
     ) -> vk::Bool32 {
         if message_severity >= LAYER_SEVERITY {
             let message = unsafe { CStr::from_ptr((*p_callback_data).p_message) };
-            eprintln!("Validation layer: {:?}", message);
+            eprintln!(
+                "{} {:?}",
+                "Validation layer:".truecolor(255, 172, 28),
+                message
+            );
         }
 
         vk::FALSE
