@@ -38,9 +38,11 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn new<T>(event_loop: &EventLoop<T>) -> Self {
+    /// Creates the application and initialize the Vulkan working environment
+    pub fn create<T>(event_loop: &EventLoop<T>) -> Self {
         let entry = unsafe { Entry::load().unwrap() };
 
+        // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
             enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
         let extension_names = EXTENSIONS
@@ -52,19 +54,23 @@ impl Application {
                     .map(|&ext| unsafe { CStr::from_ptr(ext) }),
             );
 
+        // Getting every requested validation layers names as an iterator of valid CStr
         #[cfg(debug_assertions)]
         let layer_names = VALIDATION_LAYERS
             .iter()
             .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap());
 
+        // Creating the VkInstance
         #[cfg(debug_assertions)]
         let instance = { Self::create_instance(&entry, extension_names, layer_names) };
         #[cfg(not(debug_assertions))]
         let instance = { Self::create_instance(&entry, extension_names) };
 
+        // Setting up the VkDebugUtilsMessengerEXT for the validation layers
         #[cfg(debug_assertions)]
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
+        // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let physical_device = Self::pick_physical_device(&instance);
         let (device, graphics_queue) = Self::create_logical_device(&instance, physical_device);
 
@@ -82,6 +88,7 @@ impl Application {
         }
     }
 
+    /// Creates the VkInstance with the requested extension names and validation layers name
     fn create_instance<'a, 'b>(
         entry: &Entry,
         extension_names: impl IntoIterator<Item = &'a CStr>,
@@ -154,9 +161,11 @@ impl Application {
         let create_info = create_info_builder.build();
 
         // Create the instance
+        // Safety: The instane is the last destroyed object
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
     }
 
+    /// Chooses the first avaible physical device that suits the needs of the application
     fn pick_physical_device(instance: &Instance) -> vk::PhysicalDevice {
         let physical_devices = unsafe { instance.enumerate_physical_devices().unwrap() };
         physical_devices
@@ -165,13 +174,13 @@ impl Application {
             .unwrap()
     }
 
+    /// Checks if the physical device meets the application's requirements
     fn is_device_suitable(instance: &Instance, device: vk::PhysicalDevice) -> bool {
-        // let _device_proprieties = unsafe { instance.get_physical_device_properties(device) };
-        // let _device_features = unsafe { instance.get_physical_device_features(device) };
         let indices = Self::find_queue_families(instance, device);
         indices.is_complete()
     }
 
+    /// Finds the needed queue families from the physical device
     fn find_queue_families(instance: &Instance, device: vk::PhysicalDevice) -> QueueFamilyIndice {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(device) };
@@ -190,6 +199,7 @@ impl Application {
         indices
     }
 
+    /// Creates the VkDevice
     fn create_logical_device(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
@@ -208,7 +218,7 @@ impl Application {
             .enabled_features(&device_features)
             .build();
 
-        // Safety: The Device is destroyed befor the parent Instance, see Application::cleanup().
+        // Safety: The Device is destroyed befor the parent Instance, see Application::cleanup()
         let device = unsafe {
             instance
                 .create_device(physical_device, &create_info, None)
@@ -220,6 +230,7 @@ impl Application {
         (device, queue)
     }
 
+    /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
     fn setup_debug_messenger(
         entry: &Entry,
@@ -238,6 +249,7 @@ impl Application {
         (debug_util_ext, debug_util_messenger)
     }
 
+    /// Creates the VkDebugUtilsMessengerCreateInfoEXT for the debug messenger
     #[cfg(debug_assertions)]
     fn debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
         vk::DebugUtilsMessengerCreateInfoEXT::builder()
@@ -256,6 +268,7 @@ impl Application {
             .build()
     }
 
+    /// Is called for every validation layers event
     #[cfg(debug_assertions)]
     extern "system" fn debug_callback(
         message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -279,6 +292,7 @@ impl Application {
         todo!()
     }
 
+    /// Destroys the Vulkan objects
     pub fn cleanup(&self) {
         unsafe {
             self.device.destroy_device(None);
