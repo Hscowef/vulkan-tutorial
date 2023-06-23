@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 
 #[cfg(debug_assertions)]
 use ash::extensions::ext;
-use ash::{vk, Entry, Instance};
+use ash::{vk, Device, Entry, Instance};
 use ash_window::enumerate_required_extensions;
 use colored::Colorize;
 use raw_window_handle::HasRawDisplayHandle;
@@ -28,6 +28,8 @@ pub struct Application {
     _entry: Entry,
     instance: Instance,
     physical_device: vk::PhysicalDevice,
+    device: Device,
+    graphics_queue: vk::Queue,
 
     #[cfg(debug_assertions)]
     debug_util_ext: ext::DebugUtils,
@@ -64,11 +66,14 @@ impl Application {
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
         let physical_device = Self::pick_physical_device(&instance);
+        let (device, graphics_queue) = Self::create_logical_device(&instance, physical_device);
 
         Self {
             _entry: entry,
             instance,
             physical_device,
+            device,
+            graphics_queue,
 
             #[cfg(debug_assertions)]
             debug_util_ext,
@@ -178,11 +183,41 @@ impl Application {
             }
 
             if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                indices.graphics_family = Some(i)
+                indices.graphics_family = Some(i as u32)
             }
         }
 
         indices
+    }
+
+    fn create_logical_device(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> (Device, vk::Queue) {
+        let indices = Self::find_queue_families(instance, physical_device);
+
+        let queue_create_info = vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(indices.graphics_family.unwrap())
+            .queue_priorities(&[1.0])
+            .build();
+
+        let device_features = vk::PhysicalDeviceFeatures::builder().build();
+
+        let create_info = vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&[queue_create_info])
+            .enabled_features(&device_features)
+            .build();
+
+        // Safety: The Device is destroyed befor the parent Instance, see Application::cleanup().
+        let device = unsafe {
+            instance
+                .create_device(physical_device, &create_info, None)
+                .unwrap()
+        };
+
+        let queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+
+        (device, queue)
     }
 
     #[cfg(debug_assertions)]
@@ -246,6 +281,8 @@ impl Application {
 
     pub fn cleanup(&self) {
         unsafe {
+            self.device.destroy_device(None);
+
             #[cfg(debug_assertions)]
             self.debug_util_ext
                 .destroy_debug_utils_messenger(self.debug_messenger, None);

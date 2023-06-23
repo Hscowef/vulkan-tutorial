@@ -1,5 +1,5 @@
 pub struct QueueFamilyIndice {
-    pub graphics_family: Option<usize>,
+    pub graphics_family: Option<u32>,
 }
 
 impl QueueFamilyIndice {
