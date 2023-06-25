@@ -5,7 +5,8 @@ use crate::queue_families::QueueFamilyIndice;
 use std::ffi::{CStr, CString};
 
 #[cfg(debug_assertions)]
-use ash::extensions::{ext, khr};
+use ash::extensions::ext;
+use ash::extensions::khr;
 use ash::{vk, Device, Entry, Instance};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
