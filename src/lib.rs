@@ -34,6 +34,7 @@ pub struct Application {
     physical_device: vk::PhysicalDevice,
     device: Device,
     graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
 
     #[cfg(debug_assertions)]
     debug_messenger: vk::DebugUtilsMessengerEXT,
@@ -77,7 +78,7 @@ impl Application {
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let (physical_device, queue_family_indices) =
             Self::pick_physical_device(&instance, surface, &surface_ext);
-        let (device, graphics_queue) =
+        let (device, graphics_queue, present_queue) =
             Self::create_logical_device(&instance, physical_device, queue_family_indices);
 
         Self {
@@ -91,6 +92,7 @@ impl Application {
             physical_device,
             device,
             graphics_queue,
+            present_queue,
 
             #[cfg(debug_assertions)]
             debug_messenger,
@@ -263,16 +265,22 @@ impl Application {
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
         indices: QueueFamilyIndice,
-    ) -> (Device, vk::Queue) {
-        let queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(indices.graphics_family.unwrap())
-            .queue_priorities(&[1.0])
-            .build();
+    ) -> (Device, vk::Queue, vk::Queue) {
+        let unique_families = indices.get_unique_families();
+        let mut queue_create_infos = Vec::with_capacity(unique_families.len());
+        for queue_family in unique_families.into_iter() {
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(queue_family)
+                    .queue_priorities(&[1.0])
+                    .build(),
+            )
+        }
 
         let device_features = vk::PhysicalDeviceFeatures::builder().build();
 
         let create_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&[queue_create_info])
+            .queue_create_infos(&queue_create_infos)
             .enabled_features(&device_features)
             .build();
 
@@ -283,9 +291,11 @@ impl Application {
                 .unwrap()
         };
 
-        let queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+        let graphics_queue =
+            unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+        let present_queue = unsafe { device.get_device_queue(indices.present_family.unwrap(), 0) };
 
-        (device, queue)
+        (device, graphics_queue, present_queue)
     }
 
     /// Sets up the debug messenger for the validation layers
