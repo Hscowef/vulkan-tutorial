@@ -75,8 +75,10 @@ impl Application {
         let (surface, surface_ext) = Self::create_surface(&entry, &instance, event_loop, &window);
 
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
-        let physical_device = Self::pick_physical_device(&instance);
-        let (device, graphics_queue) = Self::create_logical_device(&instance, physical_device);
+        let (physical_device, queue_family_indices) =
+            Self::pick_physical_device(&instance, surface, &surface_ext);
+        let (device, graphics_queue) =
+            Self::create_logical_device(&instance, physical_device, queue_family_indices);
 
         Self {
             _entry: entry,
@@ -194,33 +196,62 @@ impl Application {
     }
 
     /// Chooses the first avaible physical device that suits the needs of the application
-    fn pick_physical_device(instance: &Instance) -> vk::PhysicalDevice {
+    fn pick_physical_device(
+        instance: &Instance,
+        surface: vk::SurfaceKHR,
+        surface_ext: &khr::Surface,
+    ) -> (vk::PhysicalDevice, QueueFamilyIndice) {
         let physical_devices = unsafe { instance.enumerate_physical_devices().unwrap() };
         physical_devices
             .into_iter()
-            .find(|&device| Self::is_device_suitable(instance, device))
+            .find_map(|device| {
+                Self::is_device_suitable(instance, device, surface, surface_ext)
+                    .and_then(|indices| Some((device, indices)))
+            })
             .unwrap()
     }
 
     /// Checks if the physical device meets the application's requirements
-    fn is_device_suitable(instance: &Instance, device: vk::PhysicalDevice) -> bool {
-        let indices = Self::find_queue_families(instance, device);
-        indices.is_complete()
+    fn is_device_suitable(
+        instance: &Instance,
+        device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+        surface_ext: &khr::Surface,
+    ) -> Option<QueueFamilyIndice> {
+        let indices = Self::find_queue_families(instance, device, surface, surface_ext);
+        indices.is_complete().then_some(indices)
     }
 
     /// Finds the needed queue families from the physical device
-    fn find_queue_families(instance: &Instance, device: vk::PhysicalDevice) -> QueueFamilyIndice {
+    fn find_queue_families(
+        instance: &Instance,
+        device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+        surface_ext: &khr::Surface,
+    ) -> QueueFamilyIndice {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(device) };
 
         let mut indices = QueueFamilyIndice::default();
-        for (i, family) in queue_families.iter().enumerate() {
+        for (i, family) in queue_families
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i as u32, f))
+        {
             if indices.is_complete() {
                 break;
             }
 
             if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                indices.graphics_family = Some(i as u32)
+                indices.graphics_family = Some(i)
+            }
+
+            if unsafe {
+                surface_ext
+                    .get_physical_device_surface_support(device, i, surface)
+                    .unwrap()
+            } {
+                indices.present_family = Some(i as u32)
             }
         }
 
@@ -231,9 +262,8 @@ impl Application {
     fn create_logical_device(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
+        indices: QueueFamilyIndice,
     ) -> (Device, vk::Queue) {
-        let indices = Self::find_queue_families(instance, physical_device);
-
         let queue_create_info = vk::DeviceQueueCreateInfo::builder()
             .queue_family_index(indices.graphics_family.unwrap())
             .queue_priorities(&[1.0])
