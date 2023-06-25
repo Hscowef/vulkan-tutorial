@@ -5,12 +5,11 @@ use crate::queue_families::QueueFamilyIndice;
 use std::ffi::{CStr, CString};
 
 #[cfg(debug_assertions)]
-use ash::extensions::ext;
+use ash::extensions::{ext, khr};
 use ash::{vk, Device, Entry, Instance};
-use ash_window::enumerate_required_extensions;
 use colored::Colorize;
-use raw_window_handle::HasRawDisplayHandle;
-use winit::event_loop::EventLoop;
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use winit::{event_loop::EventLoop, window::Window};
 
 #[cfg(debug_assertions)]
 const EXTENSIONS: &[&[u8]] = &[b"VK_EXT_debug_utils\0"];
@@ -26,25 +25,28 @@ const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
 #[allow(dead_code)]
 pub struct Application {
     _entry: Entry,
+    surface_ext: khr::Surface,
+    #[cfg(debug_assertions)]
+    debug_util_ext: ext::DebugUtils,
+
     instance: Instance,
+    surface: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
     device: Device,
     graphics_queue: vk::Queue,
 
-    #[cfg(debug_assertions)]
-    debug_util_ext: ext::DebugUtils,
     #[cfg(debug_assertions)]
     debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
 impl Application {
     /// Creates the application and initialize the Vulkan working environment
-    pub fn create<T>(event_loop: &EventLoop<T>) -> Self {
+    pub fn create<T>(event_loop: &EventLoop<T>, window: &Window) -> Self {
         let entry = unsafe { Entry::load().unwrap() };
 
         // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
-            enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
+            ash_window::enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
         let extension_names = EXTENSIONS
             .iter()
             .map(|&ext| CStr::from_bytes_with_nul(ext).unwrap())
@@ -70,19 +72,24 @@ impl Application {
         #[cfg(debug_assertions)]
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
+        let (surface, surface_ext) = Self::create_surface(&entry, &instance, event_loop, &window);
+
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let physical_device = Self::pick_physical_device(&instance);
         let (device, graphics_queue) = Self::create_logical_device(&instance, physical_device);
 
         Self {
             _entry: entry,
+            surface_ext,
+            #[cfg(debug_assertions)]
+            debug_util_ext,
+
             instance,
+            surface,
             physical_device,
             device,
             graphics_queue,
 
-            #[cfg(debug_assertions)]
-            debug_util_ext,
             #[cfg(debug_assertions)]
             debug_messenger,
         }
@@ -163,6 +170,27 @@ impl Application {
         // Create the instance
         // Safety: The instane is the last destroyed object
         unsafe { entry.create_instance(&create_info, None) }.unwrap()
+    }
+
+    fn create_surface<T>(
+        entry: &Entry,
+        instance: &Instance,
+        event_loop: &EventLoop<T>,
+        window: &Window,
+    ) -> (vk::SurfaceKHR, khr::Surface) {
+        let surface_ext = khr::Surface::new(entry, instance);
+        let surface = unsafe {
+            ash_window::create_surface(
+                entry,
+                instance,
+                event_loop.raw_display_handle(),
+                window.raw_window_handle(),
+                None,
+            )
+            .unwrap()
+        };
+
+        (surface, surface_ext)
     }
 
     /// Chooses the first avaible physical device that suits the needs of the application
@@ -296,6 +324,7 @@ impl Application {
     pub fn cleanup(&self) {
         unsafe {
             self.device.destroy_device(None);
+            self.surface_ext.destroy_surface(self.surface, None);
 
             #[cfg(debug_assertions)]
             self.debug_util_ext

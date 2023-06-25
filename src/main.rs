@@ -20,7 +20,7 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    let application = Application::create(&event_loop);
+    let application = Application::create(&event_loop, &window);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
