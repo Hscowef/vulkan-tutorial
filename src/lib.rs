@@ -6,8 +6,7 @@ use std::ffi::{CStr, CString};
 
 #[cfg(debug_assertions)]
 use ash::extensions::ext;
-use ash::extensions::khr;
-use ash::{vk, Device, Entry, Instance};
+use ash::{extensions::khr, vk, Device, Entry, Instance};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::{event_loop::EventLoop, window::Window};
