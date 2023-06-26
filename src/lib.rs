@@ -43,15 +43,23 @@ struct SwapChainHolder {
     extent: vk::Extent2D,
 }
 
+struct SurfaceHodlder {
+    surface_ext: khr::Surface,
+    surface: vk::SurfaceKHR,
+}
+
+#[cfg(debug_assertions)]
+struct DebugMessengerHolder {
+    debug_util_ext: ext::DebugUtils,
+    debug_messenger: vk::DebugUtilsMessengerEXT,
+}
+
 #[allow(dead_code)]
 pub struct Application {
     _entry: Entry,
-    surface_ext: khr::Surface,
-    #[cfg(debug_assertions)]
-    debug_util_ext: ext::DebugUtils,
 
     instance: Instance,
-    surface: vk::SurfaceKHR,
+    surface: SurfaceHodlder,
     physical_device: vk::PhysicalDevice,
     device: Device,
     graphics_queue: vk::Queue,
@@ -59,7 +67,7 @@ pub struct Application {
     swapchain: SwapChainHolder,
 
     #[cfg(debug_assertions)]
-    debug_messenger: vk::DebugUtilsMessengerEXT,
+    debug_messenger: DebugMessengerHolder,
 }
 
 impl Application {
@@ -88,13 +96,13 @@ impl Application {
 
         // Setting up the VkDebugUtilsMessengerEXT for the validation layers
         #[cfg(debug_assertions)]
-        let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
+        let debug_messenger = Self::setup_debug_messenger(&entry, &instance);
 
-        let (surface, surface_ext) = Self::create_surface(&entry, &instance, event_loop, window);
+        let surface = Self::create_surface(&entry, &instance, event_loop, window);
 
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let (physical_device, queue_family_indices) =
-            Self::pick_physical_device(&instance, surface, &surface_ext);
+            Self::pick_physical_device(&instance, &surface);
         let (device, graphics_queue, present_queue) =
             Self::create_logical_device(&instance, physical_device, queue_family_indices);
 
@@ -102,16 +110,12 @@ impl Application {
             &instance,
             &device,
             physical_device,
-            surface,
-            &surface_ext,
+            &surface,
             queue_family_indices,
         );
 
         Self {
             _entry: entry,
-            surface_ext,
-            #[cfg(debug_assertions)]
-            debug_util_ext,
 
             instance,
             surface,
@@ -208,7 +212,7 @@ impl Application {
         instance: &Instance,
         event_loop: &EventLoop<T>,
         window: &Window,
-    ) -> (vk::SurfaceKHR, khr::Surface) {
+    ) -> SurfaceHodlder {
         let surface_ext = khr::Surface::new(entry, instance);
         let surface = unsafe {
             ash_window::create_surface(
@@ -221,20 +225,22 @@ impl Application {
             .unwrap()
         };
 
-        (surface, surface_ext)
+        SurfaceHodlder {
+            surface_ext,
+            surface,
+        }
     }
 
     /// Chooses the first avaible physical device that suits the needs of the application
     fn pick_physical_device(
         instance: &Instance,
-        surface: vk::SurfaceKHR,
-        surface_ext: &khr::Surface,
+        surface: &SurfaceHodlder,
     ) -> (vk::PhysicalDevice, QueueFamilyIndice) {
         let physical_devices = unsafe { instance.enumerate_physical_devices().unwrap() };
         physical_devices
             .into_iter()
             .find_map(|device| {
-                Self::is_device_suitable(instance, device, surface, surface_ext)
+                Self::is_device_suitable(instance, device, &surface)
                     .map(|indices| (device, indices))
             })
             .unwrap()
@@ -244,10 +250,9 @@ impl Application {
     fn is_device_suitable(
         instance: &Instance,
         device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-        surface_ext: &khr::Surface,
+        surface: &SurfaceHodlder,
     ) -> Option<QueueFamilyIndice> {
-        let indices = Self::find_queue_families(instance, device, surface, surface_ext);
+        let indices = Self::find_queue_families(instance, device, surface);
         if !indices.is_complete() {
             return None;
         }
@@ -257,7 +262,7 @@ impl Application {
             return None;
         }
 
-        let swapchain_details = Self::query_swapchain_support(device, surface, surface_ext);
+        let swapchain_details = Self::query_swapchain_support(device, surface);
         let swapchain_adequate =
             !swapchain_details.formats.is_empty() && !swapchain_details.present_modes.is_empty();
         if !swapchain_adequate {
@@ -271,8 +276,7 @@ impl Application {
     fn find_queue_families(
         instance: &Instance,
         device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-        surface_ext: &khr::Surface,
+        surface: &SurfaceHodlder,
     ) -> QueueFamilyIndice {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(device) };
@@ -292,8 +296,9 @@ impl Application {
             }
 
             if unsafe {
-                surface_ext
-                    .get_physical_device_surface_support(device, i, surface)
+                surface
+                    .surface_ext
+                    .get_physical_device_surface_support(device, i, surface.surface)
                     .unwrap()
             } {
                 indices.present_family = Some(i)
@@ -326,24 +331,26 @@ impl Application {
 
     fn query_swapchain_support(
         device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-        surface_ext: &khr::Surface,
+        surface: &SurfaceHodlder,
     ) -> SwapChainDetails {
         let capabilities = unsafe {
-            surface_ext
-                .get_physical_device_surface_capabilities(device, surface)
+            surface
+                .surface_ext
+                .get_physical_device_surface_capabilities(device, surface.surface)
                 .unwrap()
         };
 
         let formats = unsafe {
-            surface_ext
-                .get_physical_device_surface_formats(device, surface)
+            surface
+                .surface_ext
+                .get_physical_device_surface_formats(device, surface.surface)
                 .unwrap()
         };
 
         let present_modes = unsafe {
-            surface_ext
-                .get_physical_device_surface_present_modes(device, surface)
+            surface
+                .surface_ext
+                .get_physical_device_surface_present_modes(device, surface.surface)
                 .unwrap()
         };
 
@@ -436,12 +443,10 @@ impl Application {
         instance: &Instance,
         device: &Device,
         physical_device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-        surface_ext: &khr::Surface,
+        surface: &SurfaceHodlder,
         indices: QueueFamilyIndice,
     ) -> SwapChainHolder {
-        let swapchain_support =
-            Self::query_swapchain_support(physical_device, surface, surface_ext);
+        let swapchain_support = Self::query_swapchain_support(physical_device, surface);
 
         let surface_format = Self::choose_swap_surface_format(&swapchain_support.formats);
         let present_mode = Self::choose_swap_present_mode(&swapchain_support.present_modes);
@@ -456,7 +461,7 @@ impl Application {
         }
 
         let create_info_builder = vk::SwapchainCreateInfoKHR::builder()
-            .surface(surface)
+            .surface(surface.surface)
             .image_format(surface_format.format)
             .image_color_space(surface_format.color_space)
             .present_mode(present_mode)
@@ -496,21 +501,21 @@ impl Application {
 
     /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
-    fn setup_debug_messenger(
-        entry: &Entry,
-        instance: &Instance,
-    ) -> (ext::DebugUtils, vk::DebugUtilsMessengerEXT) {
+    fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> DebugMessengerHolder {
         let debug_util_ext = ext::DebugUtils::new(entry, instance);
 
         let create_info = Self::debug_messenger_create_info();
 
-        let debug_util_messenger = unsafe {
+        let debug_messenger = unsafe {
             debug_util_ext
                 .create_debug_utils_messenger(&create_info, None)
                 .unwrap()
         };
 
-        (debug_util_ext, debug_util_messenger)
+        DebugMessengerHolder {
+            debug_util_ext,
+            debug_messenger,
+        }
     }
 
     /// Creates the VkDebugUtilsMessengerCreateInfoEXT for the debug messenger
@@ -563,11 +568,14 @@ impl Application {
                 .swapchain_ext
                 .destroy_swapchain(self.swapchain.swapchain, None);
             self.device.destroy_device(None);
-            self.surface_ext.destroy_surface(self.surface, None);
+            self.surface
+                .surface_ext
+                .destroy_surface(self.surface.surface, None);
 
             #[cfg(debug_assertions)]
-            self.debug_util_ext
-                .destroy_debug_utils_messenger(self.debug_messenger, None);
+            self.debug_messenger
+                .debug_util_ext
+                .destroy_debug_utils_messenger(self.debug_messenger.debug_messenger, None);
 
             self.instance.destroy_instance(None);
         };
