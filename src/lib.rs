@@ -2,7 +2,10 @@ mod queue_families;
 
 use crate::queue_families::QueueFamilyIndice;
 
-use std::ffi::{CStr, CString};
+use std::{
+    collections::HashSet,
+    ffi::{CStr, CString},
+};
 
 #[cfg(debug_assertions)]
 use ash::extensions::ext;
@@ -12,12 +15,18 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::{event_loop::EventLoop, window::Window};
 
 #[cfg(debug_assertions)]
-const EXTENSIONS: &[&[u8]] = &[b"VK_EXT_debug_utils\0"];
+const EXTENSIONS: &[&CStr] = &[ext::DebugUtils::name()];
 #[cfg(not(debug_assertions))]
-const EXTENSIONS: &[&[u8]] = &[];
+const EXTENSIONS: &[&CStr] = &[];
+
+const DEVICE_EXTENSIONS: &[&CStr] = &[khr::Swapchain::name()];
 
 #[cfg(debug_assertions)]
-const VALIDATION_LAYERS: &[&[u8]] = &[b"VK_LAYER_KHRONOS_validation\0"];
+const VALIDATION_LAYERS: &[&CStr] = unsafe {
+    &[CStr::from_bytes_with_nul_unchecked(
+        b"VK_LAYER_KHRONOS_validation\0",
+    )]
+};
 #[cfg(debug_assertions)]
 const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
     vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE;
@@ -48,20 +57,15 @@ impl Application {
         // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
             ash_window::enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
-        let extension_names = EXTENSIONS
-            .iter()
-            .map(|&ext| CStr::from_bytes_with_nul(ext).unwrap())
-            .chain(
-                winit_extension_names
-                    .iter()
-                    .map(|&ext| unsafe { CStr::from_ptr(ext) }),
-            );
+        let extension_names = EXTENSIONS.into_iter().map(|&ext| ext).chain(
+            winit_extension_names
+                .iter()
+                .map(|&ext| unsafe { CStr::from_ptr(ext) }),
+        );
 
         // Getting every requested validation layers names as an iterator of valid CStr
         #[cfg(debug_assertions)]
-        let layer_names = VALIDATION_LAYERS
-            .iter()
-            .map(|&lay| CStr::from_bytes_with_nul(lay).unwrap());
+        let layer_names = VALIDATION_LAYERS.into_iter().map(|&lay| lay);
 
         // Creating the VkInstance
         #[cfg(debug_assertions)]
@@ -221,7 +225,9 @@ impl Application {
         surface_ext: &khr::Surface,
     ) -> Option<QueueFamilyIndice> {
         let indices = Self::find_queue_families(instance, device, surface, surface_ext);
-        indices.is_complete().then_some(indices)
+
+        (indices.is_complete() && Self::check_device_extensions_support(instance, device))
+            .then_some(indices)
     }
 
     /// Finds the needed queue families from the physical device
@@ -258,6 +264,27 @@ impl Application {
         }
 
         indices
+    }
+
+    fn check_device_extensions_support(instance: &Instance, device: vk::PhysicalDevice) -> bool {
+        let avaible_extensions = unsafe {
+            instance
+                .enumerate_device_extension_properties(device)
+                .unwrap()
+        };
+
+        let mut avaible_extensions_set = HashSet::new();
+        for a_ext in avaible_extensions.into_iter() {
+            avaible_extensions_set.insert(unsafe { CStr::from_ptr(a_ext.extension_name.as_ptr()) });
+        }
+
+        for &ext in DEVICE_EXTENSIONS.into_iter() {
+            if avaible_extensions_set.insert(ext) == false {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Creates the VkDevice
