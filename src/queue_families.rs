@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct QueueFamilyIndice {
     pub graphics_family: Option<u32>,
     pub present_family: Option<u32>,
@@ -22,14 +22,5 @@ impl QueueFamilyIndice {
         }
 
         uniques
-    }
-}
-
-impl Default for QueueFamilyIndice {
-    fn default() -> Self {
-        Self {
-            graphics_family: None,
-            present_family: None,
-        }
     }
 }

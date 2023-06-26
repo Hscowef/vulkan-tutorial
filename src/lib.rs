@@ -70,7 +70,7 @@ impl Application {
         // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
             ash_window::enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
-        let extension_names = EXTENSIONS.into_iter().map(|&ext| ext).chain(
+        let extension_names = EXTENSIONS.iter().copied().chain(
             winit_extension_names
                 .iter()
                 .map(|&ext| unsafe { CStr::from_ptr(ext) }),
@@ -78,7 +78,7 @@ impl Application {
 
         // Getting every requested validation layers names as an iterator of valid CStr
         #[cfg(debug_assertions)]
-        let layer_names = VALIDATION_LAYERS.into_iter().map(|&lay| lay);
+        let layer_names = VALIDATION_LAYERS.iter().copied();
 
         // Creating the VkInstance
         #[cfg(debug_assertions)]
@@ -90,7 +90,7 @@ impl Application {
         #[cfg(debug_assertions)]
         let (debug_util_ext, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
-        let (surface, surface_ext) = Self::create_surface(&entry, &instance, event_loop, &window);
+        let (surface, surface_ext) = Self::create_surface(&entry, &instance, event_loop, window);
 
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let (physical_device, queue_family_indices) =
@@ -235,7 +235,7 @@ impl Application {
             .into_iter()
             .find_map(|device| {
                 Self::is_device_suitable(instance, device, surface, surface_ext)
-                    .and_then(|indices| Some((device, indices)))
+                    .map(|indices| (device, indices))
             })
             .unwrap()
     }
@@ -296,7 +296,7 @@ impl Application {
                     .get_physical_device_surface_support(device, i, surface)
                     .unwrap()
             } {
-                indices.present_family = Some(i as u32)
+                indices.present_family = Some(i)
             }
         }
 
@@ -315,8 +315,8 @@ impl Application {
             avaible_extensions_set.insert(unsafe { CStr::from_ptr(a_ext.extension_name.as_ptr()) });
         }
 
-        for &ext in DEVICE_EXTENSIONS.into_iter() {
-            if avaible_extensions_set.insert(ext) == false {
+        for &ext in DEVICE_EXTENSIONS.iter() {
+            if !avaible_extensions_set.insert(ext) {
                 return false;
             }
         }
@@ -408,7 +408,7 @@ impl Application {
 
         let device_features = vk::PhysicalDeviceFeatures::builder().build();
         let device_extensions = DEVICE_EXTENSIONS
-            .into_iter()
+            .iter()
             .map(|&ext| ext.as_ptr())
             .collect::<Vec<*const i8>>();
 
