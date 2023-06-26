@@ -305,10 +305,15 @@ impl Application {
         }
 
         let device_features = vk::PhysicalDeviceFeatures::builder().build();
+        let device_extensions = DEVICE_EXTENSIONS
+            .into_iter()
+            .map(|&ext| ext.as_ptr())
+            .collect::<Vec<*const i8>>();
 
         let create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
             .enabled_features(&device_features)
+            .enabled_extension_names(&device_extensions)
             .build();
 
         // Safety: The Device is destroyed befor the parent Instance, see Application::cleanup()
