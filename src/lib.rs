@@ -1,4 +1,5 @@
 mod queue_families;
+mod swap_chain_details;
 
 use crate::queue_families::QueueFamilyIndice;
 
@@ -12,6 +13,8 @@ use ash::extensions::ext;
 use ash::{extensions::khr, vk, Device, Entry, Instance};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use swap_chain_details::SwapChainDetails;
+// use swap_chain_details::SwapChainDetails;
 use winit::{event_loop::EventLoop, window::Window};
 
 #[cfg(debug_assertions)]
@@ -225,9 +228,23 @@ impl Application {
         surface_ext: &khr::Surface,
     ) -> Option<QueueFamilyIndice> {
         let indices = Self::find_queue_families(instance, device, surface, surface_ext);
+        if !indices.is_complete() {
+            return None;
+        }
 
-        (indices.is_complete() && Self::check_device_extensions_support(instance, device))
-            .then_some(indices)
+        let extensions_supported = Self::check_device_extensions_support(instance, device);
+        if !extensions_supported {
+            return None;
+        }
+
+        let swap_chain_details = Self::query_swap_chain_support(device, surface, surface_ext);
+        let swap_chain_adequate =
+            !swap_chain_details.formats.is_empty() && !swap_chain_details.present_modes.is_empty();
+        if !swap_chain_adequate {
+            return None;
+        }
+
+        Some(indices)
     }
 
     /// Finds the needed queue families from the physical device
@@ -285,6 +302,36 @@ impl Application {
         }
 
         true
+    }
+
+    fn query_swap_chain_support(
+        device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+        surface_ext: &khr::Surface,
+    ) -> SwapChainDetails {
+        let capabilities = unsafe {
+            surface_ext
+                .get_physical_device_surface_capabilities(device, surface)
+                .unwrap()
+        };
+
+        let formats = unsafe {
+            surface_ext
+                .get_physical_device_surface_formats(device, surface)
+                .unwrap()
+        };
+
+        let present_modes = unsafe {
+            surface_ext
+                .get_physical_device_surface_present_modes(device, surface)
+                .unwrap()
+        };
+
+        SwapChainDetails {
+            capabilities,
+            formats,
+            present_modes,
+        }
     }
 
     /// Creates the VkDevice
