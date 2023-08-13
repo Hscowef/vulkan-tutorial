@@ -39,6 +39,7 @@ struct SwapChainHolder {
     swapchain_ext: khr::Swapchain,
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
     image_format: vk::Format,
     extent: vk::Extent2D,
 }
@@ -489,14 +490,48 @@ impl Application {
         let swapchain_ext = khr::Swapchain::new(instance, device);
         let swapchain = unsafe { swapchain_ext.create_swapchain(&create_info, None).unwrap() };
         let swapchain_images = unsafe { swapchain_ext.get_swapchain_images(swapchain).unwrap() };
+        let swapchain_image_views =
+            Self::create_image_views(device, &swapchain_images, surface_format.format);
 
         SwapChainHolder {
             swapchain_ext,
             swapchain,
             swapchain_images,
+            swapchain_image_views,
             image_format: surface_format.format,
             extent,
         }
+    }
+
+    fn create_image_views(
+        device: &Device,
+        images: &Vec<vk::Image>,
+        image_format: vk::Format,
+    ) -> Vec<vk::ImageView> {
+        let mut image_views = Vec::with_capacity(images.len());
+
+        for &image in images {
+            let create_info = vk::ImageViewCreateInfo::builder()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(image_format)
+                .components(vk::ComponentMapping::default())
+                .subresource_range(
+                    vk::ImageSubresourceRange::builder()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .build(),
+                )
+                .build();
+
+            let image_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
+            image_views.push(image_view)
+        }
+
+        image_views
     }
 
     /// Sets up the debug messenger for the validation layers
@@ -564,6 +599,9 @@ impl Application {
     /// Destroys the Vulkan objects
     pub fn cleanup(&self) {
         unsafe {
+            for &image_view in self.swapchain.swapchain_image_views.iter() {
+                self.device.destroy_image_view(image_view, None)
+            }
             self.swapchain
                 .swapchain_ext
                 .destroy_swapchain(self.swapchain.swapchain, None);
