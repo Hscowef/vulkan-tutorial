@@ -67,6 +67,8 @@ pub struct Application {
     present_queue: vk::Queue,
     swapchain: SwapChainHolder,
 
+    pipeline_layout: vk::PipelineLayout,
+
     #[cfg(debug_assertions)]
     debug_messenger: DebugMessengerHolder,
 }
@@ -115,6 +117,8 @@ impl Application {
             queue_family_indices,
         );
 
+        let pipeline_layout = Self::create_graphics_pipeline(&device, &swapchain);
+
         Self {
             _entry: entry,
 
@@ -125,6 +129,8 @@ impl Application {
             graphics_queue,
             present_queue,
             swapchain,
+
+            pipeline_layout,
 
             #[cfg(debug_assertions)]
             debug_messenger,
@@ -534,6 +540,144 @@ impl Application {
         image_views
     }
 
+    fn create_graphics_pipeline(
+        device: &Device,
+        swapchain: &SwapChainHolder,
+    ) -> vk::PipelineLayout {
+        let vert_shader_u8 = include_bytes!("spirv/vertex.spv");
+        let frag_shader_u8 = include_bytes!("spirv/fragment.spv");
+
+        let vert_shader_code = Self::make_spirv_raw(vert_shader_u8);
+        let frag_shader_code = Self::make_spirv_raw(frag_shader_u8);
+
+        let vert_module = Self::create_shader_module(device, &vert_shader_code);
+        let frag_module = Self::create_shader_module(device, &frag_shader_code);
+
+        let entry_point = CString::new("main").unwrap();
+        let vert_shader_stage_info = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vert_module)
+            .name(&entry_point)
+            .build();
+        let frag_shader_stage_info = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(frag_module)
+            .name(&entry_point)
+            .build();
+
+        let shader_stages_info = [vert_shader_stage_info, frag_shader_stage_info];
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_create_info = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states)
+            .build();
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&[])
+            .vertex_attribute_descriptions(&[])
+            .build();
+
+        let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false)
+            .build();
+
+        let viewport = vk::Viewport::builder()
+            .x(0.0)
+            .y(0.0)
+            .width(swapchain.extent.width as f32)
+            .height(swapchain.extent.height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0)
+            .build();
+
+        let scissor = vk::Rect2D::builder()
+            .offset(vk::Offset2D::builder().x(0).y(0).build())
+            .extent(swapchain.extent)
+            .build();
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+            .viewport_count(1)
+            .scissor_count(1)
+            .build();
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false)
+            .depth_bias_constant_factor(0.0)
+            .depth_bias_clamp(0.0)
+            .depth_bias_slope_factor(0.0)
+            .build();
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+            .min_sample_shading(1.0)
+            .sample_mask(&[])
+            .alpha_to_coverage_enable(false)
+            .alpha_to_one_enable(false)
+            .build();
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)
+            // .src_color_blend_factor(vk::BlendFactor::ONE)
+            // .dst_color_blend_factor(vk::BlendFactor::ZERO)
+            // .color_blend_op(vk::BlendOp::ADD)
+            // .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            // .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            // .alpha_blend_op(vk::BlendOp::ADD)
+            .build();
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::builder()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::COPY)
+            .attachments(&[color_blend_attachment])
+            .blend_constants([0.0, 0.0, 0.0, 0.0])
+            .build();
+
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&[])
+            .push_constant_ranges(&[])
+            .build();
+        let pipeline_layout = unsafe {
+            device
+                .create_pipeline_layout(&pipeline_layout_info, None)
+                .unwrap()
+        };
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        pipeline_layout
+    }
+
+    // Code taken from https://github.com/gfx-rs/wgpu
+    fn make_spirv_raw(bytes: &[u8]) -> Vec<u32> {
+        let mut words = vec![0u32; bytes.len() / std::mem::size_of::<u32>()];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                words.as_mut_ptr() as *mut u8,
+                bytes.len(),
+            );
+        }
+
+        words
+    }
+
+    fn create_shader_module(device: &Device, bytes: &[u32]) -> vk::ShaderModule {
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(bytes).build();
+        unsafe { device.create_shader_module(&create_info, None).unwrap() }
+    }
+
     /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
     fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> DebugMessengerHolder {
@@ -599,6 +743,9 @@ impl Application {
     /// Destroys the Vulkan objects
     pub fn cleanup(&self) {
         unsafe {
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
             }
