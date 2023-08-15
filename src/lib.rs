@@ -73,6 +73,7 @@ pub struct Application {
     present_queue: vk::Queue,
     swapchain: SwapChainHolder,
     pipeline: GraphicsPipelineHolder,
+    swapchain_frame_buffers: Vec<vk::Framebuffer>,
 
     #[cfg(debug_assertions)]
     debug_messenger: DebugMessengerHolder,
@@ -124,6 +125,8 @@ impl Application {
 
         let pipeline = Self::create_graphics_pipeline(&device, &swapchain);
 
+        let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain);
+
         Self {
             _entry: entry,
 
@@ -135,6 +138,7 @@ impl Application {
             present_queue,
             swapchain,
             pipeline,
+            swapchain_frame_buffers,
 
             #[cfg(debug_assertions)]
             debug_messenger,
@@ -739,6 +743,29 @@ impl Application {
         unsafe { device.create_shader_module(&create_info, None).unwrap() }
     }
 
+    fn create_frame_buffers(
+        device: &Device,
+        pipeline: &GraphicsPipelineHolder,
+        swapchain: &SwapChainHolder,
+    ) -> Vec<vk::Framebuffer> {
+        let mut frame_buffers = vec![];
+        for &attachment in swapchain.swapchain_image_views.iter() {
+            let frame_buffer_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(pipeline.renderpass)
+                .attachments(&[attachment])
+                .attachment_count(1)
+                .width(swapchain.extent.width)
+                .height(swapchain.extent.height)
+                .layers(1)
+                .build();
+
+            frame_buffers
+                .push(unsafe { device.create_framebuffer(&frame_buffer_info, None).unwrap() });
+        }
+
+        frame_buffers
+    }
+
     /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
     fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> DebugMessengerHolder {
@@ -808,6 +835,11 @@ impl Application {
                 .destroy_pipeline_layout(self.pipeline.pipeline_layout, None);
 
             self.device.destroy_pipeline(self.pipeline.pipeline, None);
+
+            for (i, _) in self.swapchain_frame_buffers.iter().enumerate() {
+                self.device
+                    .destroy_framebuffer(self.swapchain_frame_buffers[i], None);
+            }
 
             self.device
                 .destroy_render_pass(self.pipeline.renderpass, None);
