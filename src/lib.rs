@@ -67,6 +67,7 @@ pub struct Application {
     present_queue: vk::Queue,
     swapchain: SwapChainHolder,
 
+    renderpass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
 
     #[cfg(debug_assertions)]
@@ -117,6 +118,8 @@ impl Application {
             queue_family_indices,
         );
 
+        let renderpass = Self::create_render_pass(&device, &swapchain);
+
         let pipeline_layout = Self::create_graphics_pipeline(&device, &swapchain);
 
         Self {
@@ -130,6 +133,7 @@ impl Application {
             present_queue,
             swapchain,
 
+            renderpass,
             pipeline_layout,
 
             #[cfg(debug_assertions)]
@@ -540,6 +544,36 @@ impl Application {
         image_views
     }
 
+    fn create_render_pass(device: &Device, swapchain: &SwapChainHolder) -> vk::RenderPass {
+        let color_attachent = vk::AttachmentDescription::builder()
+            .format(swapchain.image_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .build();
+
+        let color_attachment_ref = vk::AttachmentReference::builder()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build();
+
+        let subpass = vk::SubpassDescription::builder()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&[color_attachment_ref])
+            .build();
+
+        let renderpass_info = vk::RenderPassCreateInfo::builder()
+            .attachments(&[color_attachent])
+            .subpasses(&[subpass])
+            .build();
+
+        unsafe { device.create_render_pass(&renderpass_info, None).unwrap() }
+    }
+
     fn create_graphics_pipeline(
         device: &Device,
         swapchain: &SwapChainHolder,
@@ -745,6 +779,8 @@ impl Application {
         unsafe {
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
+
+            self.device.destroy_render_pass(self.renderpass, None);
 
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
