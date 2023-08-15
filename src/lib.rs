@@ -49,6 +49,12 @@ struct SurfaceHodlder {
     surface: vk::SurfaceKHR,
 }
 
+struct GraphicsPipelineHolder {
+    renderpass: vk::RenderPass,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+}
+
 #[cfg(debug_assertions)]
 struct DebugMessengerHolder {
     debug_util_ext: ext::DebugUtils,
@@ -66,9 +72,7 @@ pub struct Application {
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
     swapchain: SwapChainHolder,
-
-    renderpass: vk::RenderPass,
-    pipeline_layout: vk::PipelineLayout,
+    pipeline: GraphicsPipelineHolder,
 
     #[cfg(debug_assertions)]
     debug_messenger: DebugMessengerHolder,
@@ -118,9 +122,7 @@ impl Application {
             queue_family_indices,
         );
 
-        let renderpass = Self::create_render_pass(&device, &swapchain);
-
-        let pipeline_layout = Self::create_graphics_pipeline(&device, &swapchain);
+        let pipeline = Self::create_graphics_pipeline(&device, &swapchain);
 
         Self {
             _entry: entry,
@@ -132,9 +134,7 @@ impl Application {
             graphics_queue,
             present_queue,
             swapchain,
-
-            renderpass,
-            pipeline_layout,
+            pipeline,
 
             #[cfg(debug_assertions)]
             debug_messenger,
@@ -251,8 +251,7 @@ impl Application {
         physical_devices
             .into_iter()
             .find_map(|device| {
-                Self::is_device_suitable(instance, device, &surface)
-                    .map(|indices| (device, indices))
+                Self::is_device_suitable(instance, device, surface).map(|indices| (device, indices))
             })
             .unwrap()
     }
@@ -577,7 +576,9 @@ impl Application {
     fn create_graphics_pipeline(
         device: &Device,
         swapchain: &SwapChainHolder,
-    ) -> vk::PipelineLayout {
+    ) -> GraphicsPipelineHolder {
+        let renderpass = Self::create_render_pass(device, swapchain);
+
         let vert_shader_u8 = include_bytes!("spirv/vertex.spv");
         let frag_shader_u8 = include_bytes!("spirv/fragment.spv");
 
@@ -616,19 +617,19 @@ impl Application {
             .primitive_restart_enable(false)
             .build();
 
-        let viewport = vk::Viewport::builder()
-            .x(0.0)
-            .y(0.0)
-            .width(swapchain.extent.width as f32)
-            .height(swapchain.extent.height as f32)
-            .min_depth(0.0)
-            .max_depth(1.0)
-            .build();
+        // let viewport = vk::Viewport::builder()
+        //     .x(0.0)
+        //     .y(0.0)
+        //     .width(swapchain.extent.width as f32)
+        //     .height(swapchain.extent.height as f32)
+        //     .min_depth(0.0)
+        //     .max_depth(1.0)
+        //     .build();
 
-        let scissor = vk::Rect2D::builder()
-            .offset(vk::Offset2D::builder().x(0).y(0).build())
-            .extent(swapchain.extent)
-            .build();
+        // let scissor = vk::Rect2D::builder()
+        //     .offset(vk::Offset2D::builder().x(0).y(0).build())
+        //     .extent(swapchain.extent)
+        //     .build();
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
             .viewport_count(1)
@@ -685,12 +686,38 @@ impl Application {
                 .unwrap()
         };
 
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stages_info)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly_info)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_create_info)
+            .layout(pipeline_layout)
+            .render_pass(renderpass)
+            .subpass(0)
+            .base_pipeline_handle(vk::Pipeline::null())
+            .base_pipeline_index(-1)
+            .build();
+
+        let pipeline = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .unwrap()[0]
+        };
+
         unsafe {
             device.destroy_shader_module(vert_module, None);
             device.destroy_shader_module(frag_module, None);
         }
 
-        pipeline_layout
+        GraphicsPipelineHolder {
+            renderpass,
+            pipeline,
+            pipeline_layout,
+        }
     }
 
     // Code taken from https://github.com/gfx-rs/wgpu
@@ -778,9 +805,12 @@ impl Application {
     pub fn cleanup(&self) {
         unsafe {
             self.device
-                .destroy_pipeline_layout(self.pipeline_layout, None);
+                .destroy_pipeline_layout(self.pipeline.pipeline_layout, None);
 
-            self.device.destroy_render_pass(self.renderpass, None);
+            self.device.destroy_pipeline(self.pipeline.pipeline, None);
+
+            self.device
+                .destroy_render_pass(self.pipeline.renderpass, None);
 
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
