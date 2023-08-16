@@ -10,7 +10,11 @@ use std::{
 
 #[cfg(debug_assertions)]
 use ash::extensions::ext;
-use ash::{extensions::khr, vk, Device, Entry, Instance};
+use ash::{
+    extensions::khr,
+    vk::{self, Offset2D},
+    Device, Entry, Instance,
+};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use swapchain_details::SwapChainDetails;
@@ -74,6 +78,8 @@ pub struct Application {
     swapchain: SwapChainHolder,
     pipeline: GraphicsPipelineHolder,
     swapchain_frame_buffers: Vec<vk::Framebuffer>,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
 
     #[cfg(debug_assertions)]
     debug_messenger: DebugMessengerHolder,
@@ -127,6 +133,9 @@ impl Application {
 
         let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain);
 
+        let command_pool = Self::create_command_pool(&device, queue_family_indices);
+        let command_buffer = Self::create_command_buffer(&device, command_pool);
+
         Self {
             _entry: entry,
 
@@ -139,6 +148,8 @@ impl Application {
             swapchain,
             pipeline,
             swapchain_frame_buffers,
+            command_pool,
+            command_buffer,
 
             #[cfg(debug_assertions)]
             debug_messenger,
@@ -621,20 +632,6 @@ impl Application {
             .primitive_restart_enable(false)
             .build();
 
-        // let viewport = vk::Viewport::builder()
-        //     .x(0.0)
-        //     .y(0.0)
-        //     .width(swapchain.extent.width as f32)
-        //     .height(swapchain.extent.height as f32)
-        //     .min_depth(0.0)
-        //     .max_depth(1.0)
-        //     .build();
-
-        // let scissor = vk::Rect2D::builder()
-        //     .offset(vk::Offset2D::builder().x(0).y(0).build())
-        //     .extent(swapchain.extent)
-        //     .build();
-
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
             .viewport_count(1)
             .scissor_count(1)
@@ -766,6 +763,97 @@ impl Application {
         frame_buffers
     }
 
+    fn create_command_pool(device: &Device, queue_families: QueueFamilyIndice) -> vk::CommandPool {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(queue_families.graphics_family.unwrap())
+            .build();
+
+        unsafe { device.create_command_pool(&pool_info, None).unwrap() }
+    }
+
+    fn create_command_buffer(device: &Device, command_pool: vk::CommandPool) -> vk::CommandBuffer {
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+
+        unsafe { device.allocate_command_buffers(&alloc_info).unwrap()[0] }
+    }
+
+    fn record_command_buffer(
+        device: &Device,
+        command_buffer: vk::CommandBuffer,
+        image_index: u32,
+        render_pass: vk::RenderPass,
+        swapchain: &SwapChainHolder,
+        swapchain_frame_buffers: &Vec<vk::Framebuffer>,
+        pipeline: &GraphicsPipelineHolder,
+    ) {
+        let begin_info = vk::CommandBufferBeginInfo::builder().build();
+
+        unsafe {
+            device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .unwrap()
+        };
+
+        let clear_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        };
+
+        let render_pass_info = vk::RenderPassBeginInfo::builder()
+            .render_pass(render_pass)
+            .framebuffer(swapchain_frame_buffers[image_index as usize])
+            .render_area(
+                vk::Rect2D::builder()
+                    .offset(vk::Offset2D::builder().x(0).y(0).build())
+                    .extent(swapchain.extent)
+                    .build(),
+            )
+            .clear_values(&[clear_color])
+            .build();
+
+        let viewport = vk::Viewport::builder()
+            .x(0.0)
+            .y(0.0)
+            .width(swapchain.extent.width as f32)
+            .height(swapchain.extent.height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0)
+            .build();
+
+        let scissor = vk::Rect2D::builder()
+            .offset(vk::Offset2D::builder().x(0).y(0).build())
+            .extent(swapchain.extent)
+            .build();
+
+        unsafe {
+            device.cmd_begin_render_pass(
+                command_buffer,
+                &render_pass_info,
+                vk::SubpassContents::INLINE,
+            );
+
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline,
+            );
+
+            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+
+            device.cmd_draw(command_buffer, 3, 1, 0, 0);
+
+            device.cmd_end_render_pass(command_buffer);
+            device.end_command_buffer(command_buffer).unwrap();
+        }
+    }
+
     /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
     fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> DebugMessengerHolder {
@@ -847,6 +935,9 @@ impl Application {
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
             }
+
+            self.device.destroy_command_pool(self.command_pool, None);
+
             self.swapchain
                 .swapchain_ext
                 .destroy_swapchain(self.swapchain.swapchain, None);
