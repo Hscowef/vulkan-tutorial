@@ -10,11 +10,7 @@ use std::{
 
 #[cfg(debug_assertions)]
 use ash::extensions::ext;
-use ash::{
-    extensions::khr,
-    vk::{self, Offset2D},
-    Device, Entry, Instance,
-};
+use ash::{extensions::khr, vk, Device, Entry, Instance};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use swapchain_details::SwapChainDetails;
@@ -81,6 +77,10 @@ pub struct Application {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
 
+    image_avaible_semaphore: vk::Semaphore,
+    render_done_semaphore: vk::Semaphore,
+    in_flight_fence: vk::Fence,
+
     #[cfg(debug_assertions)]
     debug_messenger: DebugMessengerHolder,
 }
@@ -136,6 +136,9 @@ impl Application {
         let command_pool = Self::create_command_pool(&device, queue_family_indices);
         let command_buffer = Self::create_command_buffer(&device, command_pool);
 
+        let (image_avaible_semaphore, render_done_semaphore, in_flight_fence) =
+            Self::create_sync_objects(&device);
+
         Self {
             _entry: entry,
 
@@ -151,8 +154,60 @@ impl Application {
             command_pool,
             command_buffer,
 
+            image_avaible_semaphore,
+            render_done_semaphore,
+            in_flight_fence,
+
             #[cfg(debug_assertions)]
             debug_messenger,
+        }
+    }
+
+    pub fn draw_frame(&self) {
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.in_flight_fence], true, std::u64::MAX)
+                .unwrap();
+            self.device.reset_fences(&[self.in_flight_fence]).unwrap();
+
+            let image_index = self
+                .swapchain
+                .swapchain_ext
+                .acquire_next_image(
+                    self.swapchain.swapchain,
+                    std::u64::MAX,
+                    self.image_avaible_semaphore,
+                    vk::Fence::null(),
+                )
+                .unwrap();
+
+            self.device
+                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .unwrap();
+
+            self.record_command_buffer(image_index.0);
+
+            let submit_info = vk::SubmitInfo::builder()
+                .wait_semaphores(&[self.image_avaible_semaphore])
+                .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+                .command_buffers(&[self.command_buffer])
+                .signal_semaphores(&[self.render_done_semaphore])
+                .build();
+
+            self.device
+                .queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence)
+                .unwrap();
+
+            let present_info = vk::PresentInfoKHR::builder()
+                .wait_semaphores(&[self.render_done_semaphore])
+                .swapchains(&[self.swapchain.swapchain])
+                .image_indices(&[image_index.0])
+                .build();
+
+            self.swapchain
+                .swapchain_ext
+                .queue_present(self.present_queue, &present_info)
+                .unwrap();
         }
     }
 
@@ -580,9 +635,19 @@ impl Application {
             .color_attachments(&[color_attachment_ref])
             .build();
 
+        let dependency = vk::SubpassDependency::builder()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .build();
+
         let renderpass_info = vk::RenderPassCreateInfo::builder()
             .attachments(&[color_attachent])
             .subpasses(&[subpass])
+            .dependencies(&[dependency])
             .build();
 
         unsafe { device.create_render_pass(&renderpass_info, None).unwrap() }
@@ -782,20 +847,12 @@ impl Application {
         unsafe { device.allocate_command_buffers(&alloc_info).unwrap()[0] }
     }
 
-    fn record_command_buffer(
-        device: &Device,
-        command_buffer: vk::CommandBuffer,
-        image_index: u32,
-        render_pass: vk::RenderPass,
-        swapchain: &SwapChainHolder,
-        swapchain_frame_buffers: &Vec<vk::Framebuffer>,
-        pipeline: &GraphicsPipelineHolder,
-    ) {
+    fn record_command_buffer(&self, image_index: u32) {
         let begin_info = vk::CommandBufferBeginInfo::builder().build();
 
         unsafe {
-            device
-                .begin_command_buffer(command_buffer, &begin_info)
+            self.device
+                .begin_command_buffer(self.command_buffer, &begin_info)
                 .unwrap()
         };
 
@@ -806,12 +863,12 @@ impl Application {
         };
 
         let render_pass_info = vk::RenderPassBeginInfo::builder()
-            .render_pass(render_pass)
-            .framebuffer(swapchain_frame_buffers[image_index as usize])
+            .render_pass(self.pipeline.renderpass)
+            .framebuffer(self.swapchain_frame_buffers[image_index as usize])
             .render_area(
                 vk::Rect2D::builder()
                     .offset(vk::Offset2D::builder().x(0).y(0).build())
-                    .extent(swapchain.extent)
+                    .extent(self.swapchain.extent)
                     .build(),
             )
             .clear_values(&[clear_color])
@@ -820,37 +877,58 @@ impl Application {
         let viewport = vk::Viewport::builder()
             .x(0.0)
             .y(0.0)
-            .width(swapchain.extent.width as f32)
-            .height(swapchain.extent.height as f32)
+            .width(self.swapchain.extent.width as f32)
+            .height(self.swapchain.extent.height as f32)
             .min_depth(0.0)
             .max_depth(1.0)
             .build();
 
         let scissor = vk::Rect2D::builder()
             .offset(vk::Offset2D::builder().x(0).y(0).build())
-            .extent(swapchain.extent)
+            .extent(self.swapchain.extent)
             .build();
 
         unsafe {
-            device.cmd_begin_render_pass(
-                command_buffer,
+            self.device.cmd_begin_render_pass(
+                self.command_buffer,
                 &render_pass_info,
                 vk::SubpassContents::INLINE,
             );
 
-            device.cmd_bind_pipeline(
-                command_buffer,
+            self.device.cmd_bind_pipeline(
+                self.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                pipeline.pipeline,
+                self.pipeline.pipeline,
             );
 
-            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            self.device
+                .cmd_set_viewport(self.command_buffer, 0, &[viewport]);
+            self.device
+                .cmd_set_scissor(self.command_buffer, 0, &[scissor]);
 
-            device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
 
-            device.cmd_end_render_pass(command_buffer);
-            device.end_command_buffer(command_buffer).unwrap();
+            self.device.cmd_end_render_pass(self.command_buffer);
+            self.device.end_command_buffer(self.command_buffer).unwrap();
+        }
+    }
+
+    fn create_sync_objects(device: &Device) -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
+        let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
+        let fence_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
+
+        unsafe {
+            let image_avaible_semaphore = device.create_semaphore(&semaphore_info, None).unwrap();
+            let render_done_semaphore = device.create_semaphore(&semaphore_info, None).unwrap();
+            let in_flight_fence = device.create_fence(&fence_info, None).unwrap();
+
+            (
+                image_avaible_semaphore,
+                render_done_semaphore,
+                in_flight_fence,
+            )
         }
     }
 
@@ -912,13 +990,11 @@ impl Application {
         vk::FALSE
     }
 
-    fn _main_loop() {
-        todo!()
-    }
-
     /// Destroys the Vulkan objects
     pub fn cleanup(&self) {
         unsafe {
+            self.device.device_wait_idle().unwrap();
+
             self.device
                 .destroy_pipeline_layout(self.pipeline.pipeline_layout, None);
 
@@ -935,6 +1011,12 @@ impl Application {
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
             }
+
+            self.device
+                .destroy_semaphore(self.image_avaible_semaphore, None);
+            self.device
+                .destroy_semaphore(self.render_done_semaphore, None);
+            self.device.destroy_fence(self.in_flight_fence, None);
 
             self.device.destroy_command_pool(self.command_pool, None);
 

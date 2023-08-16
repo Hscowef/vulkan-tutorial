@@ -26,6 +26,9 @@ fn main() {
         *control_flow = ControlFlow::Wait;
 
         match event {
+            Event::RedrawRequested(window_id) if window_id == window.id() => {
+                application.draw_frame();
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 window_id,
