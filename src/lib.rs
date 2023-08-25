@@ -1,28 +1,30 @@
+mod app_error;
 mod queue_families;
 mod swapchain_details;
 
-use crate::queue_families::QueueFamilyIndice;
+use app_error::{AppError, AppErrorType};
+use queue_families::QueueFamilyIndice;
+use swapchain_details::SwapChainDetails;
 
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
 };
 
-#[cfg(debug_assertions)]
-use ash::extensions::ext;
 use ash::{extensions::khr, vk, Device, Entry, Instance};
 use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
-use swapchain_details::SwapChainDetails;
-// use swapchain_details::SwapChainDetails;
 use winit::{event_loop::EventLoop, window::Window};
+
+#[cfg(debug_assertions)]
+use ash::extensions::ext;
+
+const DEVICE_EXTENSIONS: &[&CStr] = &[khr::Swapchain::name()];
 
 #[cfg(debug_assertions)]
 const EXTENSIONS: &[&CStr] = &[ext::DebugUtils::name()];
 #[cfg(not(debug_assertions))]
 const EXTENSIONS: &[&CStr] = &[];
-
-const DEVICE_EXTENSIONS: &[&CStr] = &[khr::Swapchain::name()];
 
 #[cfg(debug_assertions)]
 const VALIDATION_LAYERS: &[&CStr] = unsafe {
@@ -30,14 +32,17 @@ const VALIDATION_LAYERS: &[&CStr] = unsafe {
         b"VK_LAYER_KHRONOS_validation\0",
     )]
 };
+
 #[cfg(debug_assertions)]
 const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
     vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE;
 
-#[allow(dead_code)]
+pub type AppResult<T> = Result<T, AppError>;
+
 struct SwapChainHolder {
     swapchain_ext: khr::Swapchain,
     swapchain: vk::SwapchainKHR,
+    #[allow(dead_code)]
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
     image_format: vk::Format,
@@ -87,12 +92,17 @@ pub struct Application {
 
 impl Application {
     /// Creates the application and initialize the Vulkan working environment
-    pub fn create<T>(event_loop: &EventLoop<T>, window: &Window) -> Self {
-        let entry = unsafe { Entry::load().unwrap() };
+    pub fn create<T>(event_loop: &EventLoop<T>, window: &Window) -> AppResult<Self> {
+        let entry = unsafe {
+            Entry::load().or(AppResult::Err(AppError::new(
+                AppErrorType::VulkanLoadingError,
+            )))?
+        };
 
         // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
-            ash_window::enumerate_required_extensions(event_loop.raw_display_handle()).unwrap();
+            ash_window::enumerate_required_extensions(event_loop.raw_display_handle())
+                .or_else(|r| AppResult::Err(r.into()))?;
         let extension_names = EXTENSIONS.iter().copied().chain(
             winit_extension_names
                 .iter()
@@ -105,21 +115,21 @@ impl Application {
 
         // Creating the VkInstance
         #[cfg(debug_assertions)]
-        let instance = { Self::create_instance(&entry, extension_names, layer_names) };
+        let instance = Self::create_instance(&entry, extension_names, layer_names)?;
         #[cfg(not(debug_assertions))]
-        let instance = { Self::create_instance(&entry, extension_names) };
+        let instance = Self::create_instance(&entry, extension_names)?;
 
         // Setting up the VkDebugUtilsMessengerEXT for the validation layers
         #[cfg(debug_assertions)]
-        let debug_messenger = Self::setup_debug_messenger(&entry, &instance);
+        let debug_messenger = Self::setup_debug_messenger(&entry, &instance)?;
 
-        let surface = Self::create_surface(&entry, &instance, event_loop, window);
+        let surface = Self::create_surface(&entry, &instance, event_loop, window)?;
 
         // Choosing the VkPhisicalDevice, create the VkDevice and the graphics queue
         let (physical_device, queue_family_indices) =
-            Self::pick_physical_device(&instance, &surface);
+            Self::pick_physical_device(&instance, &surface)?;
         let (device, graphics_queue, present_queue) =
-            Self::create_logical_device(&instance, physical_device, queue_family_indices);
+            Self::create_logical_device(&instance, physical_device, queue_family_indices)?;
 
         let swapchain = Self::create_swapchain(
             &instance,
@@ -127,19 +137,19 @@ impl Application {
             physical_device,
             &surface,
             queue_family_indices,
-        );
+        )?;
 
-        let pipeline = Self::create_graphics_pipeline(&device, &swapchain);
+        let pipeline = Self::create_graphics_pipeline(&device, &swapchain)?;
 
-        let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain);
+        let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain)?;
 
-        let command_pool = Self::create_command_pool(&device, queue_family_indices);
-        let command_buffer = Self::create_command_buffer(&device, command_pool);
+        let command_pool = Self::create_command_pool(&device, queue_family_indices)?;
+        let command_buffer = Self::create_command_buffer(&device, command_pool)?;
 
         let (image_avaible_semaphore, render_done_semaphore, in_flight_fence) =
-            Self::create_sync_objects(&device);
+            Self::create_sync_objects(&device)?;
 
-        Self {
+        Ok(Self {
             _entry: entry,
 
             instance,
@@ -160,15 +170,18 @@ impl Application {
 
             #[cfg(debug_assertions)]
             debug_messenger,
-        }
+        })
     }
 
-    pub fn draw_frame(&self) {
+    pub fn draw_frame(&self) -> AppResult<()> {
         unsafe {
             self.device
                 .wait_for_fences(&[self.in_flight_fence], true, std::u64::MAX)
-                .unwrap();
-            self.device.reset_fences(&[self.in_flight_fence]).unwrap();
+                .or_else(|r| AppResult::Err(r.into()))?;
+
+            self.device
+                .reset_fences(&[self.in_flight_fence])
+                .or_else(|r| AppResult::Err(r.into()))?;
 
             let image_index = self
                 .swapchain
@@ -179,13 +192,13 @@ impl Application {
                     self.image_avaible_semaphore,
                     vk::Fence::null(),
                 )
-                .unwrap();
+                .or_else(|r| AppResult::Err(r.into()))?;
 
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                .unwrap();
+                .or_else(|r| AppResult::Err(r.into()))?;
 
-            self.record_command_buffer(image_index.0);
+            self.record_command_buffer(image_index.0)?;
 
             let submit_info = vk::SubmitInfo::builder()
                 .wait_semaphores(&[self.image_avaible_semaphore])
@@ -196,7 +209,7 @@ impl Application {
 
             self.device
                 .queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence)
-                .unwrap();
+                .or_else(|r| AppResult::Err(r.into()))?;
 
             let present_info = vk::PresentInfoKHR::builder()
                 .wait_semaphores(&[self.render_done_semaphore])
@@ -207,8 +220,10 @@ impl Application {
             self.swapchain
                 .swapchain_ext
                 .queue_present(self.present_queue, &present_info)
-                .unwrap();
+                .or_else(|r| AppResult::Err(r.into()))?;
         }
+
+        Ok(())
     }
 
     /// Creates the VkInstance with the requested extension names and validation layers name
@@ -216,7 +231,7 @@ impl Application {
         entry: &Entry,
         extension_names: impl IntoIterator<Item = &'a CStr>,
         #[cfg(debug_assertions)] layer_names: impl IntoIterator<Item = &'b CStr>,
-    ) -> Instance {
+    ) -> AppResult<Instance> {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
@@ -229,7 +244,7 @@ impl Application {
             .build();
 
         // Filter out the the extensions unsupported by the vulkan instance
-        let avaible_extensions = entry.enumerate_instance_extension_properties(None).unwrap();
+        let avaible_extensions = entry.enumerate_instance_extension_properties(None)?;
         let extensions: Vec<*const i8> =
             extension_names
                 .into_iter()
@@ -243,14 +258,17 @@ impl Application {
                     })
                     .is_some()
                 })
-                .map(|ext| ext.as_ptr() as *const i8)
+                .map(|ext| ext.as_ptr())
                 .collect();
 
         // Filter out the the layers unsupported by the vulkan instance
         #[cfg(debug_assertions)]
         let layers: Vec<*const i8> =
             {
-                let avaible_layers = entry.enumerate_instance_layer_properties().unwrap();
+                let avaible_layers = entry
+                    .enumerate_instance_layer_properties()
+                    .or_else(|r| AppResult::Err(r.into()))?;
+
                 layer_names
                     .into_iter()
                     .filter(|&lay| {
@@ -284,8 +302,12 @@ impl Application {
         let create_info = create_info_builder.build();
 
         // Create the instance
-        // Safety: The instane is the last destroyed object
-        unsafe { entry.create_instance(&create_info, None) }.unwrap()
+        // Safety: The instance is the last destroyed object
+        unsafe {
+            entry
+                .create_instance(&create_info, None)
+                .or_else(|r| AppResult::Err(r.into()))
+        }
     }
 
     fn create_surface<T>(
@@ -293,7 +315,7 @@ impl Application {
         instance: &Instance,
         event_loop: &EventLoop<T>,
         window: &Window,
-    ) -> SurfaceHodlder {
+    ) -> AppResult<SurfaceHodlder> {
         let surface_ext = khr::Surface::new(entry, instance);
         let surface = unsafe {
             ash_window::create_surface(
@@ -303,27 +325,33 @@ impl Application {
                 window.raw_window_handle(),
                 None,
             )
-            .unwrap()
+            .or_else(|r| AppResult::Err(r.into()))?
         };
 
-        SurfaceHodlder {
+        Ok(SurfaceHodlder {
             surface_ext,
             surface,
-        }
+        })
     }
 
     /// Chooses the first avaible physical device that suits the needs of the application
     fn pick_physical_device(
         instance: &Instance,
         surface: &SurfaceHodlder,
-    ) -> (vk::PhysicalDevice, QueueFamilyIndice) {
-        let physical_devices = unsafe { instance.enumerate_physical_devices().unwrap() };
+    ) -> AppResult<(vk::PhysicalDevice, QueueFamilyIndice)> {
+        let physical_devices = unsafe {
+            instance
+                .enumerate_physical_devices()
+                .or_else(|r| AppResult::Err(r.into()))?
+        };
         physical_devices
             .into_iter()
             .find_map(|device| {
-                Self::is_device_suitable(instance, device, surface).map(|indices| (device, indices))
+                Self::is_device_suitable(instance, device, surface)
+                    .ok()?
+                    .map(|indices| (device, indices))
             })
-            .unwrap()
+            .ok_or_else(|| AppError::new(AppErrorType::NoSuitableDevice))
     }
 
     /// Checks if the physical device meets the application's requirements
@@ -331,25 +359,25 @@ impl Application {
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: &SurfaceHodlder,
-    ) -> Option<QueueFamilyIndice> {
-        let indices = Self::find_queue_families(instance, device, surface);
+    ) -> AppResult<Option<QueueFamilyIndice>> {
+        let indices = Self::find_queue_families(instance, device, surface)?;
         if !indices.is_complete() {
-            return None;
+            return Ok(None);
         }
 
-        let extensions_supported = Self::check_device_extensions_support(instance, device);
+        let extensions_supported = Self::check_device_extensions_support(instance, device)?;
         if !extensions_supported {
-            return None;
+            return Ok(None);
         }
 
-        let swapchain_details = Self::query_swapchain_support(device, surface);
+        let swapchain_details = Self::query_swapchain_support(device, surface)?;
         let swapchain_adequate =
             !swapchain_details.formats.is_empty() && !swapchain_details.present_modes.is_empty();
         if !swapchain_adequate {
-            return None;
+            return Ok(None);
         }
 
-        Some(indices)
+        Ok(Some(indices))
     }
 
     /// Finds the needed queue families from the physical device
@@ -357,7 +385,7 @@ impl Application {
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: &SurfaceHodlder,
-    ) -> QueueFamilyIndice {
+    ) -> AppResult<QueueFamilyIndice> {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(device) };
 
@@ -379,20 +407,23 @@ impl Application {
                 surface
                     .surface_ext
                     .get_physical_device_surface_support(device, i, surface.surface)
-                    .unwrap()
+                    .or_else(|r| AppResult::Err(r.into()))?
             } {
                 indices.present_family = Some(i)
             }
         }
 
-        indices
+        Ok(indices)
     }
 
-    fn check_device_extensions_support(instance: &Instance, device: vk::PhysicalDevice) -> bool {
+    fn check_device_extensions_support(
+        instance: &Instance,
+        device: vk::PhysicalDevice,
+    ) -> AppResult<bool> {
         let avaible_extensions = unsafe {
             instance
                 .enumerate_device_extension_properties(device)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
         let mut avaible_extensions_set = HashSet::new();
@@ -402,49 +433,54 @@ impl Application {
 
         for &ext in DEVICE_EXTENSIONS.iter() {
             if !avaible_extensions_set.insert(ext) {
-                return false;
+                return Ok(false);
             }
         }
 
-        true
+        Ok(true)
     }
 
     fn query_swapchain_support(
         device: vk::PhysicalDevice,
         surface: &SurfaceHodlder,
-    ) -> SwapChainDetails {
+    ) -> AppResult<SwapChainDetails> {
         let capabilities = unsafe {
             surface
                 .surface_ext
                 .get_physical_device_surface_capabilities(device, surface.surface)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
         let formats = unsafe {
             surface
                 .surface_ext
                 .get_physical_device_surface_formats(device, surface.surface)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
         let present_modes = unsafe {
             surface
                 .surface_ext
                 .get_physical_device_surface_present_modes(device, surface.surface)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
-        SwapChainDetails {
+        Ok(SwapChainDetails {
             capabilities,
             formats,
             present_modes,
-        }
+        })
     }
 
+    /// Chooses the best surface format avaible for the swapchains.
+    ///
+    /// # Panic
+    /// Panics if `avaible_format` is empty.
     fn choose_swap_surface_format(
         avaible_formats: &Vec<vk::SurfaceFormatKHR>,
     ) -> vk::SurfaceFormatKHR {
         assert!(!avaible_formats.is_empty());
+
         for &format in avaible_formats {
             if format.format == vk::Format::B8G8R8A8_SRGB
                 && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
@@ -481,7 +517,7 @@ impl Application {
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
         indices: QueueFamilyIndice,
-    ) -> (Device, vk::Queue, vk::Queue) {
+    ) -> AppResult<(Device, vk::Queue, vk::Queue)> {
         let unique_families = indices.get_unique_families();
         let mut queue_create_infos = Vec::with_capacity(unique_families.len());
         for queue_family in unique_families.into_iter() {
@@ -509,14 +545,14 @@ impl Application {
         let device = unsafe {
             instance
                 .create_device(physical_device, &create_info, None)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
         let graphics_queue =
             unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
         let present_queue = unsafe { device.get_device_queue(indices.present_family.unwrap(), 0) };
 
-        (device, graphics_queue, present_queue)
+        Ok((device, graphics_queue, present_queue))
     }
 
     fn create_swapchain(
@@ -525,8 +561,8 @@ impl Application {
         physical_device: vk::PhysicalDevice,
         surface: &SurfaceHodlder,
         indices: QueueFamilyIndice,
-    ) -> SwapChainHolder {
-        let swapchain_support = Self::query_swapchain_support(physical_device, surface);
+    ) -> AppResult<SwapChainHolder> {
+        let swapchain_support = Self::query_swapchain_support(physical_device, surface)?;
 
         let surface_format = Self::choose_swap_surface_format(&swapchain_support.formats);
         let present_mode = Self::choose_swap_present_mode(&swapchain_support.present_modes);
@@ -567,26 +603,34 @@ impl Application {
         };
 
         let swapchain_ext = khr::Swapchain::new(instance, device);
-        let swapchain = unsafe { swapchain_ext.create_swapchain(&create_info, None).unwrap() };
-        let swapchain_images = unsafe { swapchain_ext.get_swapchain_images(swapchain).unwrap() };
+        let swapchain = unsafe {
+            swapchain_ext
+                .create_swapchain(&create_info, None)
+                .or_else(|r| AppResult::Err(r.into()))?
+        };
+        let swapchain_images = unsafe {
+            swapchain_ext
+                .get_swapchain_images(swapchain)
+                .or_else(|r| AppResult::Err(r.into()))?
+        };
         let swapchain_image_views =
-            Self::create_image_views(device, &swapchain_images, surface_format.format);
+            Self::create_image_views(device, &swapchain_images, surface_format.format)?;
 
-        SwapChainHolder {
+        Ok(SwapChainHolder {
             swapchain_ext,
             swapchain,
             swapchain_images,
             swapchain_image_views,
             image_format: surface_format.format,
             extent,
-        }
+        })
     }
 
     fn create_image_views(
         device: &Device,
         images: &Vec<vk::Image>,
         image_format: vk::Format,
-    ) -> Vec<vk::ImageView> {
+    ) -> AppResult<Vec<vk::ImageView>> {
         let mut image_views = Vec::with_capacity(images.len());
 
         for &image in images {
@@ -606,14 +650,21 @@ impl Application {
                 )
                 .build();
 
-            let image_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
+            let image_view = unsafe {
+                device
+                    .create_image_view(&create_info, None)
+                    .or_else(|r| AppResult::Err(r.into()))?
+            };
             image_views.push(image_view)
         }
 
-        image_views
+        Ok(image_views)
     }
 
-    fn create_render_pass(device: &Device, swapchain: &SwapChainHolder) -> vk::RenderPass {
+    fn create_render_pass(
+        device: &Device,
+        swapchain: &SwapChainHolder,
+    ) -> AppResult<vk::RenderPass> {
         let color_attachent = vk::AttachmentDescription::builder()
             .format(swapchain.image_format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -650,14 +701,18 @@ impl Application {
             .dependencies(&[dependency])
             .build();
 
-        unsafe { device.create_render_pass(&renderpass_info, None).unwrap() }
+        unsafe {
+            device
+                .create_render_pass(&renderpass_info, None)
+                .or_else(|r| AppResult::Err(r.into()))
+        }
     }
 
     fn create_graphics_pipeline(
         device: &Device,
         swapchain: &SwapChainHolder,
-    ) -> GraphicsPipelineHolder {
-        let renderpass = Self::create_render_pass(device, swapchain);
+    ) -> AppResult<GraphicsPipelineHolder> {
+        let renderpass = Self::create_render_pass(device, swapchain)?;
 
         let vert_shader_u8 = include_bytes!("spirv/vertex.spv");
         let frag_shader_u8 = include_bytes!("spirv/fragment.spv");
@@ -665,8 +720,8 @@ impl Application {
         let vert_shader_code = Self::make_spirv_raw(vert_shader_u8);
         let frag_shader_code = Self::make_spirv_raw(frag_shader_u8);
 
-        let vert_module = Self::create_shader_module(device, &vert_shader_code);
-        let frag_module = Self::create_shader_module(device, &frag_shader_code);
+        let vert_module = Self::create_shader_module(device, &vert_shader_code)?;
+        let frag_module = Self::create_shader_module(device, &frag_shader_code)?;
 
         let entry_point = CString::new("main").unwrap();
         let vert_shader_stage_info = vk::PipelineShaderStageCreateInfo::builder()
@@ -749,7 +804,7 @@ impl Application {
         let pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(&pipeline_layout_info, None)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
@@ -771,7 +826,7 @@ impl Application {
         let pipeline = unsafe {
             device
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-                .unwrap()[0]
+                .or_else(|r| AppResult::Err(r.1.into()))?[0]
         };
 
         unsafe {
@@ -779,11 +834,11 @@ impl Application {
             device.destroy_shader_module(frag_module, None);
         }
 
-        GraphicsPipelineHolder {
+        Ok(GraphicsPipelineHolder {
             renderpass,
             pipeline,
             pipeline_layout,
-        }
+        })
     }
 
     // Code taken from https://github.com/gfx-rs/wgpu
@@ -800,16 +855,20 @@ impl Application {
         words
     }
 
-    fn create_shader_module(device: &Device, bytes: &[u32]) -> vk::ShaderModule {
+    fn create_shader_module(device: &Device, bytes: &[u32]) -> AppResult<vk::ShaderModule> {
         let create_info = vk::ShaderModuleCreateInfo::builder().code(bytes).build();
-        unsafe { device.create_shader_module(&create_info, None).unwrap() }
+        unsafe {
+            device
+                .create_shader_module(&create_info, None)
+                .or_else(|r| AppResult::Err(r.into()))
+        }
     }
 
     fn create_frame_buffers(
         device: &Device,
         pipeline: &GraphicsPipelineHolder,
         swapchain: &SwapChainHolder,
-    ) -> Vec<vk::Framebuffer> {
+    ) -> AppResult<Vec<vk::Framebuffer>> {
         let mut frame_buffers = vec![];
         for &attachment in swapchain.swapchain_image_views.iter() {
             let frame_buffer_info = vk::FramebufferCreateInfo::builder()
@@ -821,40 +880,57 @@ impl Application {
                 .layers(1)
                 .build();
 
-            frame_buffers
-                .push(unsafe { device.create_framebuffer(&frame_buffer_info, None).unwrap() });
+            frame_buffers.push(unsafe {
+                device
+                    .create_framebuffer(&frame_buffer_info, None)
+                    .or_else(|r| AppResult::Err(r.into()))?
+            });
         }
 
-        frame_buffers
+        Ok(frame_buffers)
     }
 
-    fn create_command_pool(device: &Device, queue_families: QueueFamilyIndice) -> vk::CommandPool {
+    fn create_command_pool(
+        device: &Device,
+        queue_families: QueueFamilyIndice,
+    ) -> AppResult<vk::CommandPool> {
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_families.graphics_family.unwrap())
             .build();
 
-        unsafe { device.create_command_pool(&pool_info, None).unwrap() }
+        unsafe {
+            device
+                .create_command_pool(&pool_info, None)
+                .or_else(|r| AppResult::Err(r.into()))
+        }
     }
 
-    fn create_command_buffer(device: &Device, command_pool: vk::CommandPool) -> vk::CommandBuffer {
+    fn create_command_buffer(
+        device: &Device,
+        command_pool: vk::CommandPool,
+    ) -> AppResult<vk::CommandBuffer> {
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1)
             .build();
 
-        unsafe { device.allocate_command_buffers(&alloc_info).unwrap()[0] }
+        unsafe {
+            Ok(device
+                .allocate_command_buffers(&alloc_info)
+                .or_else(|r| AppResult::Err(r.into()))?[0])
+        }
     }
 
-    fn record_command_buffer(&self, image_index: u32) {
+    fn record_command_buffer(&self, image_index: u32) -> AppResult<()> {
         let begin_info = vk::CommandBufferBeginInfo::builder().build();
 
         unsafe {
             self.device
                 .begin_command_buffer(self.command_buffer, &begin_info)
-                .unwrap()
-        };
+                .or_else(|r| AppResult::Err(r.into()))?;
+        }
 
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
@@ -909,32 +985,48 @@ impl Application {
             self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
 
             self.device.cmd_end_render_pass(self.command_buffer);
-            self.device.end_command_buffer(self.command_buffer).unwrap();
+
+            self.device
+                .end_command_buffer(self.command_buffer)
+                .or_else(|r| AppResult::Err(r.into()))?;
         }
+
+        Ok(())
     }
 
-    fn create_sync_objects(device: &Device) -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
+    fn create_sync_objects(
+        device: &Device,
+    ) -> AppResult<(vk::Semaphore, vk::Semaphore, vk::Fence)> {
         let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
         let fence_info = vk::FenceCreateInfo::builder()
             .flags(vk::FenceCreateFlags::SIGNALED)
             .build();
 
         unsafe {
-            let image_avaible_semaphore = device.create_semaphore(&semaphore_info, None).unwrap();
-            let render_done_semaphore = device.create_semaphore(&semaphore_info, None).unwrap();
-            let in_flight_fence = device.create_fence(&fence_info, None).unwrap();
+            let image_avaible_semaphore = device
+                .create_semaphore(&semaphore_info, None)
+                .or_else(|r| AppResult::Err(r.into()))?;
+            let render_done_semaphore = device
+                .create_semaphore(&semaphore_info, None)
+                .or_else(|r| AppResult::Err(r.into()))?;
+            let in_flight_fence = device
+                .create_fence(&fence_info, None)
+                .or_else(|r| AppResult::Err(r.into()))?;
 
-            (
+            Ok((
                 image_avaible_semaphore,
                 render_done_semaphore,
                 in_flight_fence,
-            )
+            ))
         }
     }
 
     /// Sets up the debug messenger for the validation layers
     #[cfg(debug_assertions)]
-    fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> DebugMessengerHolder {
+    fn setup_debug_messenger(
+        entry: &Entry,
+        instance: &Instance,
+    ) -> AppResult<DebugMessengerHolder> {
         let debug_util_ext = ext::DebugUtils::new(entry, instance);
 
         let create_info = Self::debug_messenger_create_info();
@@ -942,13 +1034,13 @@ impl Application {
         let debug_messenger = unsafe {
             debug_util_ext
                 .create_debug_utils_messenger(&create_info, None)
-                .unwrap()
+                .or_else(|r| AppResult::Err(r.into()))?
         };
 
-        DebugMessengerHolder {
+        Ok(DebugMessengerHolder {
             debug_util_ext,
             debug_messenger,
-        }
+        })
     }
 
     /// Creates the VkDebugUtilsMessengerCreateInfoEXT for the debug messenger

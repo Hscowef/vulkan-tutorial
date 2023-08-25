@@ -20,14 +20,14 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    let application = Application::create(&event_loop, &window);
+    let application = Application::create(&event_loop, &window).unwrap();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
             Event::RedrawRequested(window_id) if window_id == window.id() => {
-                application.draw_frame();
+                application.draw_frame().unwrap();
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
