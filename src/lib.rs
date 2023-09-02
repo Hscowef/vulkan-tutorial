@@ -1,10 +1,8 @@
 mod app_error;
 mod queue_families;
-mod swapchain_details;
 
 use app_error::{AppError, AppErrorType};
 use queue_families::QueueFamilyIndice;
-use swapchain_details::SwapChainDetails;
 
 use std::{
     collections::HashSet,
@@ -16,24 +14,24 @@ use colored::Colorize;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::{event_loop::EventLoop, window::Window};
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "vlayers")]
 use ash::extensions::ext;
 
 const DEVICE_EXTENSIONS: &[&CStr] = &[khr::Swapchain::name()];
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "vlayers")]
 const EXTENSIONS: &[&CStr] = &[ext::DebugUtils::name()];
-#[cfg(not(debug_assertions))]
+#[cfg(not(feature = "vlayers"))]
 const EXTENSIONS: &[&CStr] = &[];
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "vlayers")]
 const VALIDATION_LAYERS: &[&CStr] = unsafe {
     &[CStr::from_bytes_with_nul_unchecked(
         b"VK_LAYER_KHRONOS_validation\0",
     )]
 };
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "vlayers")]
 const LAYER_SEVERITY: vk::DebugUtilsMessageSeverityFlagsEXT =
     vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE;
 
@@ -49,6 +47,12 @@ struct SwapChainHolder {
     extent: vk::Extent2D,
 }
 
+struct SwapChainDetails {
+    pub capabilities: vk::SurfaceCapabilitiesKHR,
+    pub formats: Vec<vk::SurfaceFormatKHR>,
+    pub present_modes: Vec<vk::PresentModeKHR>,
+}
+
 struct SurfaceHodlder {
     surface_ext: khr::Surface,
     surface: vk::SurfaceKHR,
@@ -60,18 +64,18 @@ struct GraphicsPipelineHolder {
     pipeline_layout: vk::PipelineLayout,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "vlayers")]
 struct DebugMessengerHolder {
     debug_util_ext: ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
-#[allow(dead_code)]
 pub struct Application {
     _entry: Entry,
 
     instance: Instance,
     surface: SurfaceHodlder,
+    #[allow(dead_code)]
     physical_device: vk::PhysicalDevice,
     device: Device,
     graphics_queue: vk::Queue,
@@ -86,7 +90,7 @@ pub struct Application {
     render_done_semaphore: vk::Semaphore,
     in_flight_fence: vk::Fence,
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "vlayers")]
     debug_messenger: DebugMessengerHolder,
 }
 
@@ -110,17 +114,17 @@ impl Application {
         );
 
         // Getting every requested validation layers names as an iterator of valid CStr
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let layer_names = VALIDATION_LAYERS.iter().copied();
 
         // Creating the VkInstance
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let instance = Self::create_instance(&entry, extension_names, layer_names)?;
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(feature = "vlayers"))]
         let instance = Self::create_instance(&entry, extension_names)?;
 
         // Setting up the VkDebugUtilsMessengerEXT for the validation layers
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let debug_messenger = Self::setup_debug_messenger(&entry, &instance)?;
 
         let surface = Self::create_surface(&entry, &instance, event_loop, window)?;
@@ -140,6 +144,7 @@ impl Application {
         )?;
 
         let pipeline = Self::create_graphics_pipeline(&device, &swapchain)?;
+        dbg!();
 
         let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain)?;
 
@@ -168,7 +173,7 @@ impl Application {
             render_done_semaphore,
             in_flight_fence,
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "vlayers")]
             debug_messenger,
         })
     }
@@ -230,7 +235,7 @@ impl Application {
     fn create_instance<'a, 'b>(
         entry: &Entry,
         extension_names: impl IntoIterator<Item = &'a CStr>,
-        #[cfg(debug_assertions)] layer_names: impl IntoIterator<Item = &'b CStr>,
+        #[cfg(feature = "vlayers")] layer_names: impl IntoIterator<Item = &'b CStr>,
     ) -> AppResult<Instance> {
         // Define the vulkan application info
         let app_name = CString::new("Vulkan Tutorial").unwrap();
@@ -262,7 +267,7 @@ impl Application {
                 .collect();
 
         // Filter out the the layers unsupported by the vulkan instance
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let layers: Vec<*const i8> =
             {
                 let avaible_layers = entry
@@ -290,15 +295,15 @@ impl Application {
             .application_info(&app_info)
             .enabled_extension_names(&extensions);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let mut debug_messenger_create_info = Self::debug_messenger_create_info();
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "vlayers")]
         let create_info = create_info_builder
             .enabled_layer_names(&layers)
             .push_next(&mut debug_messenger_create_info)
             .build();
 
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(feature = "vlayers"))]
         let create_info = create_info_builder.build();
 
         // Create the instance
@@ -700,6 +705,7 @@ impl Application {
             .subpasses(&[subpass])
             .dependencies(&[dependency])
             .build();
+        dbg!();
 
         unsafe {
             device
@@ -713,6 +719,7 @@ impl Application {
         swapchain: &SwapChainHolder,
     ) -> AppResult<GraphicsPipelineHolder> {
         let renderpass = Self::create_render_pass(device, swapchain)?;
+        dbg!();
 
         let vert_shader_u8 = include_bytes!("spirv/vertex.spv");
         let frag_shader_u8 = include_bytes!("spirv/fragment.spv");
@@ -1022,7 +1029,7 @@ impl Application {
     }
 
     /// Sets up the debug messenger for the validation layers
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "vlayers")]
     fn setup_debug_messenger(
         entry: &Entry,
         instance: &Instance,
@@ -1044,7 +1051,7 @@ impl Application {
     }
 
     /// Creates the VkDebugUtilsMessengerCreateInfoEXT for the debug messenger
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "vlayers")]
     fn debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
         vk::DebugUtilsMessengerCreateInfoEXT::builder()
             .message_severity(
@@ -1063,7 +1070,7 @@ impl Application {
     }
 
     /// Is called for every validation layers event
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "vlayers")]
     extern "system" fn debug_callback(
         message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
         _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
@@ -1120,7 +1127,7 @@ impl Application {
                 .surface_ext
                 .destroy_surface(self.surface.surface, None);
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "vlayers")]
             self.debug_messenger
                 .debug_util_ext
                 .destroy_debug_utils_messenger(self.debug_messenger.debug_messenger, None);
