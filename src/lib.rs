@@ -17,6 +17,8 @@ use winit::{event_loop::EventLoop, window::Window};
 #[cfg(feature = "vlayers")]
 use ash::extensions::ext;
 
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 const DEVICE_EXTENSIONS: &[&CStr] = &[khr::Swapchain::name()];
 
 #[cfg(feature = "vlayers")]
@@ -84,11 +86,12 @@ pub struct Application {
     pipeline: GraphicsPipelineHolder,
     swapchain_frame_buffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
+    command_buffers: Vec<vk::CommandBuffer>,
+    current_frame: usize,
 
-    image_avaible_semaphore: vk::Semaphore,
-    render_done_semaphore: vk::Semaphore,
-    in_flight_fence: vk::Fence,
+    image_avaible_semaphores: Vec<vk::Semaphore>,
+    render_done_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
 
     #[cfg(feature = "vlayers")]
     debug_messenger: DebugMessengerHolder,
@@ -148,9 +151,9 @@ impl Application {
         let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain)?;
 
         let command_pool = Self::create_command_pool(&device, queue_family_indices)?;
-        let command_buffer = Self::create_command_buffer(&device, command_pool)?;
+        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
 
-        let (image_avaible_semaphore, render_done_semaphore, in_flight_fence) =
+        let (image_avaible_semaphores, render_done_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device)?;
 
         Ok(Self {
@@ -166,25 +169,30 @@ impl Application {
             pipeline,
             swapchain_frame_buffers,
             command_pool,
-            command_buffer,
+            command_buffers,
+            current_frame: 0,
 
-            image_avaible_semaphore,
-            render_done_semaphore,
-            in_flight_fence,
+            image_avaible_semaphores,
+            render_done_semaphores,
+            in_flight_fences,
 
             #[cfg(feature = "vlayers")]
             debug_messenger,
         })
     }
 
-    pub fn draw_frame(&self) -> AppResult<()> {
+    pub fn draw_frame(&mut self) -> AppResult<()> {
         unsafe {
             self.device
-                .wait_for_fences(&[self.in_flight_fence], true, std::u64::MAX)
+                .wait_for_fences(
+                    &[self.in_flight_fences[self.current_frame]],
+                    true,
+                    std::u64::MAX,
+                )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             self.device
-                .reset_fences(&[self.in_flight_fence])
+                .reset_fences(&[self.in_flight_fences[self.current_frame]])
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             let image_index = self
@@ -193,20 +201,23 @@ impl Application {
                 .acquire_next_image(
                     self.swapchain.swapchain,
                     std::u64::MAX,
-                    self.image_avaible_semaphore,
+                    self.image_avaible_semaphores[self.current_frame],
                     vk::Fence::null(),
                 )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .reset_command_buffer(
+                    self.command_buffers[self.current_frame],
+                    vk::CommandBufferResetFlags::empty(),
+                )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             self.record_command_buffer(image_index.0)?;
 
-            let wait_semaphores = [self.image_avaible_semaphore];
-            let command_buffers = [self.command_buffer];
-            let signal_semaphores = [self.render_done_semaphore];
+            let wait_semaphores = [self.image_avaible_semaphores[self.current_frame]];
+            let command_buffers = [self.command_buffers[self.current_frame]];
+            let signal_semaphores = [self.render_done_semaphores[self.current_frame]];
 
             let submit_info = vk::SubmitInfo::builder()
                 .wait_semaphores(&wait_semaphores)
@@ -217,7 +228,11 @@ impl Application {
             let submit_infos = [*submit_info];
 
             self.device
-                .queue_submit(self.graphics_queue, &submit_infos, self.in_flight_fence)
+                .queue_submit(
+                    self.graphics_queue,
+                    &submit_infos,
+                    self.in_flight_fences[self.current_frame],
+                )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             let wait_semaphores = signal_semaphores;
@@ -234,6 +249,8 @@ impl Application {
                 .queue_present(self.present_queue, &present_info)
                 .or_else(|r| AppResult::Err(r.into()))?;
         }
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 
         Ok(())
     }
@@ -902,19 +919,19 @@ impl Application {
         }
     }
 
-    fn create_command_buffer(
+    fn create_command_buffers(
         device: &Device,
         command_pool: vk::CommandPool,
-    ) -> AppResult<vk::CommandBuffer> {
+    ) -> AppResult<Vec<vk::CommandBuffer>> {
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
+            .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32);
 
         unsafe {
-            Ok(device
+            device
                 .allocate_command_buffers(&alloc_info)
-                .or_else(|r| AppResult::Err(r.into()))?[0])
+                .or_else(|r| AppResult::Err(r.into()))
         }
     }
 
@@ -923,7 +940,7 @@ impl Application {
 
         unsafe {
             self.device
-                .begin_command_buffer(self.command_buffer, &begin_info)
+                .begin_command_buffer(self.command_buffers[self.current_frame], &begin_info)
                 .or_else(|r| AppResult::Err(r.into()))?;
         }
 
@@ -963,28 +980,30 @@ impl Application {
 
         unsafe {
             self.device.cmd_begin_render_pass(
-                self.command_buffer,
+                self.command_buffers[self.current_frame],
                 &render_pass_info,
                 vk::SubpassContents::INLINE,
             );
 
             self.device.cmd_bind_pipeline(
-                self.command_buffer,
+                self.command_buffers[self.current_frame],
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.pipeline,
             );
 
             self.device
-                .cmd_set_viewport(self.command_buffer, 0, &viewports);
+                .cmd_set_viewport(self.command_buffers[self.current_frame], 0, &viewports);
             self.device
-                .cmd_set_scissor(self.command_buffer, 0, &scissors);
-
-            self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
-
-            self.device.cmd_end_render_pass(self.command_buffer);
+                .cmd_set_scissor(self.command_buffers[self.current_frame], 0, &scissors);
 
             self.device
-                .end_command_buffer(self.command_buffer)
+                .cmd_draw(self.command_buffers[self.current_frame], 3, 1, 0, 0);
+
+            self.device
+                .cmd_end_render_pass(self.command_buffers[self.current_frame]);
+
+            self.device
+                .end_command_buffer(self.command_buffers[self.current_frame])
                 .or_else(|r| AppResult::Err(r.into()))?;
         }
 
@@ -993,27 +1012,41 @@ impl Application {
 
     fn create_sync_objects(
         device: &Device,
-    ) -> AppResult<(vk::Semaphore, vk::Semaphore, vk::Fence)> {
+    ) -> AppResult<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>)> {
         let semaphore_info = vk::SemaphoreCreateInfo::builder();
         let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
-        unsafe {
-            let image_avaible_semaphore = device
-                .create_semaphore(&semaphore_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?;
-            let render_done_semaphore = device
-                .create_semaphore(&semaphore_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?;
-            let in_flight_fence = device
-                .create_fence(&fence_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?;
+        let mut image_avaible_semaphores = vec![];
+        let mut render_done_semaphores = vec![];
+        let mut in_flight_fences = vec![];
 
-            Ok((
-                image_avaible_semaphore,
-                render_done_semaphore,
-                in_flight_fence,
-            ))
+        for _ in 0..MAX_FRAMES_IN_FLIGHT {
+            unsafe {
+                image_avaible_semaphores.push(
+                    device
+                        .create_semaphore(&semaphore_info, None)
+                        .or_else(|r| AppResult::Err(r.into()))?,
+                );
+
+                render_done_semaphores.push(
+                    device
+                        .create_semaphore(&semaphore_info, None)
+                        .or_else(|r| AppResult::Err(r.into()))?,
+                );
+
+                in_flight_fences.push(
+                    device
+                        .create_fence(&fence_info, None)
+                        .or_else(|r| AppResult::Err(r.into()))?,
+                )
+            }
         }
+
+        Ok((
+            image_avaible_semaphores,
+            render_done_semaphores,
+            in_flight_fences,
+        ))
     }
 
     /// Sets up the debug messenger for the validation layers
@@ -1099,11 +1132,13 @@ impl Application {
                 self.device.destroy_image_view(image_view, None)
             }
 
-            self.device
-                .destroy_semaphore(self.image_avaible_semaphore, None);
-            self.device
-                .destroy_semaphore(self.render_done_semaphore, None);
-            self.device.destroy_fence(self.in_flight_fence, None);
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self.device
+                    .destroy_semaphore(self.image_avaible_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.render_done_semaphores[i], None);
+                self.device.destroy_fence(self.in_flight_fences[i], None);
+            }
 
             self.device.destroy_command_pool(self.command_pool, None);
 
