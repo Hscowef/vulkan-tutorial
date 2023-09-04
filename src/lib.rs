@@ -93,6 +93,8 @@ pub struct Application {
     render_done_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
 
+    resize_flag: bool,
+
     #[cfg(feature = "vlayers")]
     debug_messenger: DebugMessengerHolder,
 }
@@ -176,9 +178,15 @@ impl Application {
             render_done_semaphores,
             in_flight_fences,
 
+            resize_flag: false,
+
             #[cfg(feature = "vlayers")]
             debug_messenger,
         })
+    }
+
+    pub fn request_resize(&mut self) {
+        self.resize_flag = true;
     }
 
     pub fn draw_frame(&mut self) -> AppResult<()> {
@@ -191,19 +199,24 @@ impl Application {
                 )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
+            let result = self.swapchain.swapchain_ext.acquire_next_image(
+                self.swapchain.swapchain,
+                std::u64::MAX,
+                self.image_avaible_semaphores[self.current_frame],
+                vk::Fence::null(),
+            );
+
+            let image_index = match result {
+                Ok((v, _)) => v,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.recreate_swapchain()?;
+                    return Ok(());
+                }
+                Err(res) => return AppResult::Err(res.into()),
+            };
+
             self.device
                 .reset_fences(&[self.in_flight_fences[self.current_frame]])
-                .or_else(|r| AppResult::Err(r.into()))?;
-
-            let image_index = self
-                .swapchain
-                .swapchain_ext
-                .acquire_next_image(
-                    self.swapchain.swapchain,
-                    std::u64::MAX,
-                    self.image_avaible_semaphores[self.current_frame],
-                    vk::Fence::null(),
-                )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
             self.device
@@ -213,7 +226,7 @@ impl Application {
                 )
                 .or_else(|r| AppResult::Err(r.into()))?;
 
-            self.record_command_buffer(image_index.0)?;
+            self.record_command_buffer(image_index)?;
 
             let wait_semaphores = [self.image_avaible_semaphores[self.current_frame]];
             let command_buffers = [self.command_buffers[self.current_frame]];
@@ -237,17 +250,27 @@ impl Application {
 
             let wait_semaphores = signal_semaphores;
             let swapchains = [self.swapchain.swapchain];
-            let image_indices = [image_index.0];
+            let image_indices = [image_index];
 
             let present_info = vk::PresentInfoKHR::builder()
                 .wait_semaphores(&wait_semaphores)
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            self.swapchain
+            let result = self
+                .swapchain
                 .swapchain_ext
-                .queue_present(self.present_queue, &present_info)
-                .or_else(|r| AppResult::Err(r.into()))?;
+                .queue_present(self.present_queue, &present_info);
+
+            match result {
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Ok(true) | Ok(_) if self.resize_flag => {
+                    self.resize_flag = false;
+                    self.recreate_swapchain()?;
+                    return Ok(());
+                }
+                Err(res) => return AppResult::Err(res.into()),
+                _ => (),
+            };
         }
 
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -629,6 +652,7 @@ impl Application {
                 .create_swapchain(&create_info, None)
                 .or_else(|r| AppResult::Err(r.into()))?
         };
+
         let swapchain_images = unsafe {
             swapchain_ext
                 .get_swapchain_images(swapchain)
@@ -645,6 +669,31 @@ impl Application {
             image_format: surface_format.format,
             extent,
         })
+    }
+
+    pub fn recreate_swapchain(&mut self) -> AppResult<()> {
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .or_else(|r| AppResult::Err(r.into()))?;
+        }
+
+        self.cleanup_swapchain();
+
+        let queue_families =
+            Self::find_queue_families(&self.instance, self.physical_device, &self.surface)?;
+        self.swapchain = Self::create_swapchain(
+            &self.instance,
+            &self.device,
+            self.physical_device,
+            &self.surface,
+            queue_families,
+        )?;
+
+        self.swapchain_frame_buffers =
+            Self::create_frame_buffers(&self.device, &self.pipeline, &self.swapchain)?;
+
+        Ok(())
     }
 
     fn create_image_views(
@@ -1110,27 +1159,36 @@ impl Application {
         vk::FALSE
     }
 
-    /// Destroys the Vulkan objects
-    pub fn cleanup(&self) {
+    fn cleanup_swapchain(&self) {
         unsafe {
-            self.device.device_wait_idle().unwrap();
-
-            self.device
-                .destroy_pipeline_layout(self.pipeline.pipeline_layout, None);
-
-            self.device.destroy_pipeline(self.pipeline.pipeline, None);
-
             for (i, _) in self.swapchain_frame_buffers.iter().enumerate() {
                 self.device
                     .destroy_framebuffer(self.swapchain_frame_buffers[i], None);
             }
 
-            self.device
-                .destroy_render_pass(self.pipeline.renderpass, None);
-
             for &image_view in self.swapchain.swapchain_image_views.iter() {
                 self.device.destroy_image_view(image_view, None)
             }
+
+            self.swapchain
+                .swapchain_ext
+                .destroy_swapchain(self.swapchain.swapchain, None);
+        }
+    }
+
+    /// Destroys the Vulkan objects
+    pub fn cleanup(&self) {
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+
+            self.cleanup_swapchain();
+
+            self.device.destroy_pipeline(self.pipeline.pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline.pipeline_layout, None);
+
+            self.device
+                .destroy_render_pass(self.pipeline.renderpass, None);
 
             for i in 0..MAX_FRAMES_IN_FLIGHT {
                 self.device
@@ -1142,18 +1200,16 @@ impl Application {
 
             self.device.destroy_command_pool(self.command_pool, None);
 
-            self.swapchain
-                .swapchain_ext
-                .destroy_swapchain(self.swapchain.swapchain, None);
             self.device.destroy_device(None);
-            self.surface
-                .surface_ext
-                .destroy_surface(self.surface.surface, None);
 
             #[cfg(feature = "vlayers")]
             self.debug_messenger
                 .debug_util_ext
                 .destroy_debug_utils_messenger(self.debug_messenger.debug_messenger, None);
+
+            self.surface
+                .surface_ext
+                .destroy_surface(self.surface.surface, None);
 
             self.instance.destroy_instance(None);
         };

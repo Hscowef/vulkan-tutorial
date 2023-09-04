@@ -16,7 +16,6 @@ fn main() {
     let window = WindowBuilder::new()
         .with_title(NAME)
         .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
-        .with_resizable(false)
         .build(&event_loop)
         .unwrap();
 
@@ -26,6 +25,10 @@ fn main() {
         *control_flow = ControlFlow::Wait;
 
         match event {
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                window_id,
+            } if window_id == window.id() => application.request_resize(),
             Event::RedrawRequested(window_id) if window_id == window.id() => {
                 application.draw_frame().unwrap();
             }
@@ -33,6 +36,7 @@ fn main() {
                 event: WindowEvent::CloseRequested,
                 window_id,
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+
             _ => (),
         }
 
