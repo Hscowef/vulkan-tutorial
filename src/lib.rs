@@ -971,6 +971,9 @@ impl Application {
             .memory_type_index(mem_type_index);
 
         let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
+        unsafe {
+            device.bind_buffer_memory(buffer, buffer_memory, 0)?;
+        }
 
         Ok((buffer, buffer_memory))
     }
@@ -994,8 +997,6 @@ impl Application {
         )?;
 
         unsafe {
-            device.bind_buffer_memory(buffer, buffer_memory, 0)?;
-
             let data_src = vertex_data.as_ptr() as *const c_void;
             let data_dst =
                 device.map_memory(buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())?;
