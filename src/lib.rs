@@ -1,7 +1,9 @@
 mod app_error;
+mod geometry;
 mod queue_families;
 
 use app_error::{AppError, AppErrorType};
+use geometry::*;
 use queue_families::QueueFamilyIndice;
 
 use std::{
@@ -16,6 +18,12 @@ use winit::{event_loop::EventLoop, window::Window};
 
 #[cfg(feature = "vlayers")]
 use ash::extensions::ext;
+
+const VERTICES: [Vertex; 3] = [
+    Vertex::new(Vec2::new(0.0, -0.5), Vec3::new(1.0, 0.0, 0.0)),
+    Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
+    Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(0.0, 0.0, 1.0)),
+];
 
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
@@ -88,6 +96,8 @@ pub struct Application {
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     current_frame: usize,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
 
     image_avaible_semaphores: Vec<vk::Semaphore>,
     render_done_semaphores: Vec<vk::Semaphore>,
@@ -110,8 +120,7 @@ impl Application {
 
         // Getting every requested extension names as an iterator of valid CStr
         let winit_extension_names =
-            ash_window::enumerate_required_extensions(event_loop.raw_display_handle())
-                .or_else(|r| AppResult::Err(r.into()))?;
+            ash_window::enumerate_required_extensions(event_loop.raw_display_handle())?;
         let extension_names = EXTENSIONS.iter().copied().chain(
             winit_extension_names
                 .iter()
@@ -153,7 +162,13 @@ impl Application {
         let swapchain_frame_buffers = Self::create_frame_buffers(&device, &pipeline, &swapchain)?;
 
         let command_pool = Self::create_command_pool(&device, queue_family_indices)?;
+
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
+
+        let vertex_buffer = Self::create_vertex_buffer(&device)?;
+        let vertex_buffer_memory =
+            Self::allocate_vertex_buffer_mem(vertex_buffer, &instance, physical_device, &device)?;
+        Self::bind_vertex_buffer_memory(&device, vertex_buffer, vertex_buffer_memory)?;
 
         let (image_avaible_semaphores, render_done_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device)?;
@@ -173,6 +188,8 @@ impl Application {
             command_pool,
             command_buffers,
             current_frame: 0,
+            vertex_buffer,
+            vertex_buffer_memory,
 
             image_avaible_semaphores,
             render_done_semaphores,
@@ -191,13 +208,11 @@ impl Application {
 
     pub fn draw_frame(&mut self) -> AppResult<()> {
         unsafe {
-            self.device
-                .wait_for_fences(
-                    &[self.in_flight_fences[self.current_frame]],
-                    true,
-                    std::u64::MAX,
-                )
-                .or_else(|r| AppResult::Err(r.into()))?;
+            self.device.wait_for_fences(
+                &[self.in_flight_fences[self.current_frame]],
+                true,
+                std::u64::MAX,
+            )?;
 
             let result = self.swapchain.swapchain_ext.acquire_next_image(
                 self.swapchain.swapchain,
@@ -216,15 +231,12 @@ impl Application {
             };
 
             self.device
-                .reset_fences(&[self.in_flight_fences[self.current_frame]])
-                .or_else(|r| AppResult::Err(r.into()))?;
+                .reset_fences(&[self.in_flight_fences[self.current_frame]])?;
 
-            self.device
-                .reset_command_buffer(
-                    self.command_buffers[self.current_frame],
-                    vk::CommandBufferResetFlags::empty(),
-                )
-                .or_else(|r| AppResult::Err(r.into()))?;
+            self.device.reset_command_buffer(
+                self.command_buffers[self.current_frame],
+                vk::CommandBufferResetFlags::empty(),
+            )?;
 
             self.record_command_buffer(image_index)?;
 
@@ -240,13 +252,11 @@ impl Application {
 
             let submit_infos = [*submit_info];
 
-            self.device
-                .queue_submit(
-                    self.graphics_queue,
-                    &submit_infos,
-                    self.in_flight_fences[self.current_frame],
-                )
-                .or_else(|r| AppResult::Err(r.into()))?;
+            self.device.queue_submit(
+                self.graphics_queue,
+                &submit_infos,
+                self.in_flight_fences[self.current_frame],
+            )?;
 
             let wait_semaphores = signal_semaphores;
             let swapchains = [self.swapchain.swapchain];
@@ -316,9 +326,7 @@ impl Application {
         #[cfg(feature = "vlayers")]
         let layers: Vec<*const i8> =
             {
-                let avaible_layers = entry
-                    .enumerate_instance_layer_properties()
-                    .or_else(|r| AppResult::Err(r.into()))?;
+                let avaible_layers = entry.enumerate_instance_layer_properties()?;
 
                 layer_names
                     .into_iter()
@@ -371,8 +379,7 @@ impl Application {
                 event_loop.raw_display_handle(),
                 window.raw_window_handle(),
                 None,
-            )
-            .or_else(|r| AppResult::Err(r.into()))?
+            )?
         };
 
         Ok(SurfaceHodlder {
@@ -386,11 +393,7 @@ impl Application {
         instance: &Instance,
         surface: &SurfaceHodlder,
     ) -> AppResult<(vk::PhysicalDevice, QueueFamilyIndice)> {
-        let physical_devices = unsafe {
-            instance
-                .enumerate_physical_devices()
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
         physical_devices
             .into_iter()
             .find_map(|device| {
@@ -451,10 +454,11 @@ impl Application {
             }
 
             if unsafe {
-                surface
-                    .surface_ext
-                    .get_physical_device_surface_support(device, i, surface.surface)
-                    .or_else(|r| AppResult::Err(r.into()))?
+                surface.surface_ext.get_physical_device_surface_support(
+                    device,
+                    i,
+                    surface.surface,
+                )?
             } {
                 indices.present_family = Some(i)
             }
@@ -467,11 +471,7 @@ impl Application {
         instance: &Instance,
         device: vk::PhysicalDevice,
     ) -> AppResult<bool> {
-        let avaible_extensions = unsafe {
-            instance
-                .enumerate_device_extension_properties(device)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let avaible_extensions = unsafe { instance.enumerate_device_extension_properties(device)? };
 
         let mut avaible_extensions_set = HashSet::new();
         for a_ext in avaible_extensions.into_iter() {
@@ -494,22 +494,19 @@ impl Application {
         let capabilities = unsafe {
             surface
                 .surface_ext
-                .get_physical_device_surface_capabilities(device, surface.surface)
-                .or_else(|r| AppResult::Err(r.into()))?
+                .get_physical_device_surface_capabilities(device, surface.surface)?
         };
 
         let formats = unsafe {
             surface
                 .surface_ext
-                .get_physical_device_surface_formats(device, surface.surface)
-                .or_else(|r| AppResult::Err(r.into()))?
+                .get_physical_device_surface_formats(device, surface.surface)?
         };
 
         let present_modes = unsafe {
             surface
                 .surface_ext
-                .get_physical_device_surface_present_modes(device, surface.surface)
-                .or_else(|r| AppResult::Err(r.into()))?
+                .get_physical_device_surface_present_modes(device, surface.surface)?
         };
 
         Ok(SwapChainDetails {
@@ -587,11 +584,7 @@ impl Application {
             .enabled_extension_names(&device_extensions);
 
         // Safety: The Device is destroyed befor the parent Instance, see Application::cleanup()
-        let device = unsafe {
-            instance
-                .create_device(physical_device, &create_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let device = unsafe { instance.create_device(physical_device, &create_info, None)? };
 
         let graphics_queue =
             unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
@@ -647,17 +640,9 @@ impl Application {
         };
 
         let swapchain_ext = khr::Swapchain::new(instance, device);
-        let swapchain = unsafe {
-            swapchain_ext
-                .create_swapchain(&create_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let swapchain = unsafe { swapchain_ext.create_swapchain(&create_info, None)? };
 
-        let swapchain_images = unsafe {
-            swapchain_ext
-                .get_swapchain_images(swapchain)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let swapchain_images = unsafe { swapchain_ext.get_swapchain_images(swapchain)? };
         let swapchain_image_views =
             Self::create_image_views(device, &swapchain_images, surface_format.format)?;
 
@@ -673,9 +658,7 @@ impl Application {
 
     pub fn recreate_swapchain(&mut self) -> AppResult<()> {
         unsafe {
-            self.device
-                .device_wait_idle()
-                .or_else(|r| AppResult::Err(r.into()))?;
+            self.device.device_wait_idle()?;
         }
 
         self.cleanup_swapchain();
@@ -718,11 +701,7 @@ impl Application {
                 .components(vk::ComponentMapping::default())
                 .subresource_range(*subsource_range);
 
-            let image_view = unsafe {
-                device
-                    .create_image_view(&create_info, None)
-                    .or_else(|r| AppResult::Err(r.into()))?
-            };
+            let image_view = unsafe { device.create_image_view(&create_info, None)? };
             image_views.push(image_view)
         }
 
@@ -809,8 +788,8 @@ impl Application {
             vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&[])
-            .vertex_attribute_descriptions(&[]);
+            .vertex_binding_descriptions(Vertex::BINDING_DESCRIPTIONS)
+            .vertex_attribute_descriptions(Vertex::ATTRIBUTE_DESCRIPTIONS);
 
         let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -862,11 +841,8 @@ impl Application {
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(&[])
             .push_constant_ranges(&[]);
-        let pipeline_layout = unsafe {
-            device
-                .create_pipeline_layout(&pipeline_layout_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let pipeline_layout =
+            unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&shader_stages_info)
@@ -943,11 +919,7 @@ impl Application {
                 .height(swapchain.extent.height)
                 .layers(1);
 
-            frame_buffers.push(unsafe {
-                device
-                    .create_framebuffer(&frame_buffer_info, None)
-                    .or_else(|r| AppResult::Err(r.into()))?
-            });
+            frame_buffers.push(unsafe { device.create_framebuffer(&frame_buffer_info, None)? });
         }
 
         Ok(frame_buffers)
@@ -966,6 +938,64 @@ impl Application {
                 .create_command_pool(&pool_info, None)
                 .or_else(|r| AppResult::Err(r.into()))
         }
+    }
+
+    fn create_vertex_buffer(device: &Device) -> AppResult<vk::Buffer> {
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size((Vertex::STRIDE * VERTICES.len()) as u64)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        unsafe { Ok(device.create_buffer(&buffer_info, None)?) }
+    }
+
+    fn allocate_vertex_buffer_mem(
+        buffer: vk::Buffer,
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &Device,
+    ) -> AppResult<vk::DeviceMemory> {
+        let mem_requirement = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+        let required_mem_proprieties =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let mem_type_index = Self::find_memory_type(
+            instance,
+            physical_device,
+            mem_requirement.memory_type_bits,
+            required_mem_proprieties,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_requirement.size)
+            .memory_type_index(mem_type_index);
+
+        unsafe { Ok(device.allocate_memory(&alloc_info, None)?) }
+    }
+
+    fn find_memory_type(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        mem_type_filter: u32,
+        proprieties: vk::MemoryPropertyFlags,
+    ) -> AppResult<u32> {
+        let mem_proprieties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        for (i, mem_type) in mem_proprieties.memory_types.iter().enumerate() {
+            if mem_type_filter & (1 << i) != 0 && mem_type.property_flags.contains(proprieties) {
+                return Ok(i as u32);
+            }
+        }
+
+        Err(AppError::new(AppErrorType::NoSuitableMemType))
+    }
+
+    fn bind_vertex_buffer_memory(
+        device: &Device,
+        buffer: vk::Buffer,
+        buffer_memory: vk::DeviceMemory,
+    ) -> AppResult<()> {
+        unsafe { Ok(device.bind_buffer_memory(buffer, buffer_memory, 0)?) }
     }
 
     fn create_command_buffers(
@@ -989,8 +1019,7 @@ impl Application {
 
         unsafe {
             self.device
-                .begin_command_buffer(self.command_buffers[self.current_frame], &begin_info)
-                .or_else(|r| AppResult::Err(r.into()))?;
+                .begin_command_buffer(self.command_buffers[self.current_frame], &begin_info)?;
         }
 
         let clear_color = vk::ClearValue {
@@ -1052,8 +1081,7 @@ impl Application {
                 .cmd_end_render_pass(self.command_buffers[self.current_frame]);
 
             self.device
-                .end_command_buffer(self.command_buffers[self.current_frame])
-                .or_else(|r| AppResult::Err(r.into()))?;
+                .end_command_buffer(self.command_buffers[self.current_frame])?;
         }
 
         Ok(())
@@ -1071,23 +1099,11 @@ impl Application {
 
         for _ in 0..MAX_FRAMES_IN_FLIGHT {
             unsafe {
-                image_avaible_semaphores.push(
-                    device
-                        .create_semaphore(&semaphore_info, None)
-                        .or_else(|r| AppResult::Err(r.into()))?,
-                );
+                image_avaible_semaphores.push(device.create_semaphore(&semaphore_info, None)?);
 
-                render_done_semaphores.push(
-                    device
-                        .create_semaphore(&semaphore_info, None)
-                        .or_else(|r| AppResult::Err(r.into()))?,
-                );
+                render_done_semaphores.push(device.create_semaphore(&semaphore_info, None)?);
 
-                in_flight_fences.push(
-                    device
-                        .create_fence(&fence_info, None)
-                        .or_else(|r| AppResult::Err(r.into()))?,
-                )
+                in_flight_fences.push(device.create_fence(&fence_info, None)?)
             }
         }
 
@@ -1108,11 +1124,8 @@ impl Application {
 
         let create_info = Self::debug_messenger_create_info();
 
-        let debug_messenger = unsafe {
-            debug_util_ext
-                .create_debug_utils_messenger(&create_info, None)
-                .or_else(|r| AppResult::Err(r.into()))?
-        };
+        let debug_messenger =
+            unsafe { debug_util_ext.create_debug_utils_messenger(&create_info, None)? };
 
         Ok(DebugMessengerHolder {
             debug_util_ext,
@@ -1182,6 +1195,9 @@ impl Application {
             self.device.device_wait_idle().unwrap();
 
             self.cleanup_swapchain();
+
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.device.free_memory(self.vertex_buffer_memory, None);
 
             self.device.destroy_pipeline(self.pipeline.pipeline, None);
             self.device

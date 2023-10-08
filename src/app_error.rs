@@ -21,11 +21,13 @@ pub enum AppErrorType {
     VulkanError(vk::Result),
     VulkanLoadingError,
     NoSuitableDevice,
+    NoSuitableMemType,
 }
 
 impl AppErrorType {
     const MSG_VULKAN_LOADING_ERROR: &'static str = "Couldn't load the Vulkan library.";
     const MSG_NO_SUITABLE_DEVICE: &'static str = "No suitable physical device is avaible.";
+    const MSG_NO_SUITABLE_MEM_TYPE: &'static str = "Failed to find suitable memory type.";
 }
 
 impl AppError {
@@ -36,6 +38,7 @@ impl AppError {
                 String::from(AppErrorType::MSG_VULKAN_LOADING_ERROR)
             }
             AppErrorType::NoSuitableDevice => String::from(AppErrorType::MSG_NO_SUITABLE_DEVICE),
+            AppErrorType::NoSuitableMemType => String::from(AppErrorType::MSG_NO_SUITABLE_MEM_TYPE),
         };
 
         Self {
