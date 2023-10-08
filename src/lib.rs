@@ -8,7 +8,7 @@ use queue_families::QueueFamilyIndice;
 
 use std::{
     collections::HashSet,
-    ffi::{CStr, CString},
+    ffi::{c_void, CStr, CString},
 };
 
 use ash::{extensions::khr, vk, Device, Entry, Instance};
@@ -20,9 +20,9 @@ use winit::{event_loop::EventLoop, window::Window};
 use ash::extensions::ext;
 
 const VERTICES: [Vertex; 3] = [
-    Vertex::new(Vec2::new(0.0, -0.5), Vec3::new(1.0, 0.0, 0.0)),
+    Vertex::new(Vec2::new(0.0, -0.5), Vec3::new(1.0, 1.0, 1.0)),
     Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
-    Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(0.0, 0.0, 1.0)),
+    Vertex::new(Vec2::new(-0.5, 0.5), Vec3::new(0.0, 0.0, 1.0)),
 ];
 
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
@@ -165,10 +165,8 @@ impl Application {
 
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
 
-        let vertex_buffer = Self::create_vertex_buffer(&device)?;
-        let vertex_buffer_memory =
-            Self::allocate_vertex_buffer_mem(vertex_buffer, &instance, physical_device, &device)?;
-        Self::bind_vertex_buffer_memory(&device, vertex_buffer, vertex_buffer_memory)?;
+        let (vertex_buffer, vertex_buffer_memory) =
+            Self::create_vertex_buffer(&instance, &device, physical_device, &VERTICES)?;
 
         let (image_avaible_semaphores, render_done_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device)?;
@@ -940,13 +938,25 @@ impl Application {
         }
     }
 
-    fn create_vertex_buffer(device: &Device) -> AppResult<vk::Buffer> {
+    fn create_vertex_buffer(
+        instance: &Instance,
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        vertex_data: &[Vertex],
+    ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
+        let buffer_size = (Vertex::STRIDE * VERTICES.len()) as u64;
         let buffer_info = vk::BufferCreateInfo::builder()
-            .size((Vertex::STRIDE * VERTICES.len()) as u64)
+            .size(buffer_size)
             .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        unsafe { Ok(device.create_buffer(&buffer_info, None)?) }
+        let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
+        let buffer_memory =
+            Self::allocate_vertex_buffer_mem(buffer, instance, physical_device, device)?;
+        Self::bind_vertex_buffer_memory(device, buffer, buffer_memory)?;
+        Self::fill_vertex_buffer(device, buffer_memory, buffer_size, vertex_data)?;
+
+        Ok((buffer, buffer_memory))
     }
 
     fn allocate_vertex_buffer_mem(
@@ -996,6 +1006,23 @@ impl Application {
         buffer_memory: vk::DeviceMemory,
     ) -> AppResult<()> {
         unsafe { Ok(device.bind_buffer_memory(buffer, buffer_memory, 0)?) }
+    }
+
+    fn fill_vertex_buffer(
+        device: &Device,
+        buffer_memory: vk::DeviceMemory,
+        buffer_size: u64,
+        vertex_data: &[Vertex],
+    ) -> AppResult<()> {
+        unsafe {
+            let data_src = vertex_data.as_ptr() as *const c_void;
+            let data_dst =
+                device.map_memory(buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())?;
+            std::ptr::copy(data_src, data_dst, buffer_size as usize);
+            device.unmap_memory(buffer_memory)
+        }
+
+        Ok(())
     }
 
     fn create_command_buffers(
@@ -1056,32 +1083,34 @@ impl Application {
         let viewports = [*viewport];
         let scissors = [*scissor];
 
+        let command_buffer = self.command_buffers[self.current_frame];
         unsafe {
             self.device.cmd_begin_render_pass(
-                self.command_buffers[self.current_frame],
+                command_buffer,
                 &render_pass_info,
                 vk::SubpassContents::INLINE,
             );
 
             self.device.cmd_bind_pipeline(
-                self.command_buffers[self.current_frame],
+                command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.pipeline,
             );
 
+            let vertex_buffers = &[self.vertex_buffer];
+            let offsets = &[0];
             self.device
-                .cmd_set_viewport(self.command_buffers[self.current_frame], 0, &viewports);
-            self.device
-                .cmd_set_scissor(self.command_buffers[self.current_frame], 0, &scissors);
+                .cmd_bind_vertex_buffers(command_buffer, 0, vertex_buffers, offsets);
+
+            self.device.cmd_set_viewport(command_buffer, 0, &viewports);
+            self.device.cmd_set_scissor(command_buffer, 0, &scissors);
 
             self.device
-                .cmd_draw(self.command_buffers[self.current_frame], 3, 1, 0, 0);
+                .cmd_draw(command_buffer, VERTICES.len() as u32, 1, 0, 0);
 
-            self.device
-                .cmd_end_render_pass(self.command_buffers[self.current_frame]);
+            self.device.cmd_end_render_pass(command_buffer);
 
-            self.device
-                .end_command_buffer(self.command_buffers[self.current_frame])?;
+            self.device.end_command_buffer(command_buffer)?;
         }
 
         Ok(())

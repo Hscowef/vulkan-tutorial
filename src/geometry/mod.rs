@@ -2,24 +2,8 @@ use std::mem;
 
 use ash::vk;
 
-pub type Vec2 = nalgebra::Vector2<f32>;
-pub type Vec3 = nalgebra::Vector3<f32>;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ShaderVertex<'a> {
-    position: &'a [f32],
-    color: &'a [f32],
-}
-
-impl<'a> From<&'a Vertex> for ShaderVertex<'a> {
-    fn from(vertex: &'a Vertex) -> Self {
-        Self {
-            position: vertex.position.as_slice(),
-            color: vertex.color.as_slice(),
-        }
-    }
-}
+pub type Vec2 = cgmath::Vector2<f32>;
+pub type Vec3 = cgmath::Vector3<f32>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
@@ -28,7 +12,7 @@ pub struct Vertex {
 }
 
 impl Vertex {
-    pub const STRIDE: usize = mem::size_of::<[f32; 2]>() + mem::size_of::<[f32; 3]>();
+    pub const STRIDE: usize = mem::size_of::<Vec2>() + mem::size_of::<Vec3>();
 
     pub const BINDING_DESCRIPTIONS: &[vk::VertexInputBindingDescription] =
         &[vk::VertexInputBindingDescription {
@@ -47,7 +31,7 @@ impl Vertex {
             binding: 0,
             location: 1,
             format: vk::Format::R32G32B32_SFLOAT,
-            offset: mem::size_of::<[f32; 2]>() as u32,
+            offset: mem::size_of::<Vec2>() as u32,
         },
     ];
 
