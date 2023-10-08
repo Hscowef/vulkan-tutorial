@@ -19,10 +19,14 @@ use winit::{event_loop::EventLoop, window::Window};
 #[cfg(feature = "vlayers")]
 use ash::extensions::ext;
 
-const VERTICES: [Vertex; 3] = [
-    Vertex::new(Vec2::new(0.0, -0.5), Vec3::new(1.0, 1.0, 1.0)),
+const VERTICES: [Vertex; 6] = [
+    Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1.0, 0.0, 0.0)),
     Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
     Vertex::new(Vec2::new(-0.5, 0.5), Vec3::new(0.0, 0.0, 1.0)),
+    //
+    Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1.0, 0.0, 0.0)),
+    Vertex::new(Vec2::new(0.5, -0.5), Vec3::new(0.0, 0.0, 1.0)),
+    Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
 ];
 
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
@@ -938,6 +942,39 @@ impl Application {
         }
     }
 
+    fn create_buffer(
+        instance: &Instance,
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        mem_proprieties: vk::MemoryPropertyFlags,
+    ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
+
+        let mem_requirement = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+        let mem_type_index = Self::find_memory_type(
+            instance,
+            physical_device,
+            mem_requirement.memory_type_bits,
+            mem_proprieties,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_requirement.size)
+            .memory_type_index(mem_type_index);
+
+        let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None)? };
+
+        Ok((buffer, buffer_memory))
+    }
+
     fn create_vertex_buffer(
         instance: &Instance,
         device: &Device,
@@ -945,42 +982,28 @@ impl Application {
         vertex_data: &[Vertex],
     ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
         let buffer_size = (Vertex::STRIDE * VERTICES.len()) as u64;
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(buffer_size)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let buffer = unsafe { device.create_buffer(&buffer_info, None)? };
-        let buffer_memory =
-            Self::allocate_vertex_buffer_mem(buffer, instance, physical_device, device)?;
-        Self::bind_vertex_buffer_memory(device, buffer, buffer_memory)?;
-        Self::fill_vertex_buffer(device, buffer_memory, buffer_size, vertex_data)?;
-
-        Ok((buffer, buffer_memory))
-    }
-
-    fn allocate_vertex_buffer_mem(
-        buffer: vk::Buffer,
-        instance: &Instance,
-        physical_device: vk::PhysicalDevice,
-        device: &Device,
-    ) -> AppResult<vk::DeviceMemory> {
-        let mem_requirement = unsafe { device.get_buffer_memory_requirements(buffer) };
-
-        let required_mem_proprieties =
+        let mem_proprieties =
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let mem_type_index = Self::find_memory_type(
+        let (buffer, buffer_memory) = Self::create_buffer(
             instance,
+            device,
             physical_device,
-            mem_requirement.memory_type_bits,
-            required_mem_proprieties,
+            buffer_size,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            mem_proprieties,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(mem_requirement.size)
-            .memory_type_index(mem_type_index);
+        unsafe {
+            device.bind_buffer_memory(buffer, buffer_memory, 0)?;
 
-        unsafe { Ok(device.allocate_memory(&alloc_info, None)?) }
+            let data_src = vertex_data.as_ptr() as *const c_void;
+            let data_dst =
+                device.map_memory(buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())?;
+            std::ptr::copy(data_src, data_dst, buffer_size as usize);
+            device.unmap_memory(buffer_memory)
+        }
+
+        Ok((buffer, buffer_memory))
     }
 
     fn find_memory_type(
@@ -998,31 +1021,6 @@ impl Application {
         }
 
         Err(AppError::new(AppErrorType::NoSuitableMemType))
-    }
-
-    fn bind_vertex_buffer_memory(
-        device: &Device,
-        buffer: vk::Buffer,
-        buffer_memory: vk::DeviceMemory,
-    ) -> AppResult<()> {
-        unsafe { Ok(device.bind_buffer_memory(buffer, buffer_memory, 0)?) }
-    }
-
-    fn fill_vertex_buffer(
-        device: &Device,
-        buffer_memory: vk::DeviceMemory,
-        buffer_size: u64,
-        vertex_data: &[Vertex],
-    ) -> AppResult<()> {
-        unsafe {
-            let data_src = vertex_data.as_ptr() as *const c_void;
-            let data_dst =
-                device.map_memory(buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy(data_src, data_dst, buffer_size as usize);
-            device.unmap_memory(buffer_memory)
-        }
-
-        Ok(())
     }
 
     fn create_command_buffers(
