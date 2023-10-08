@@ -169,8 +169,14 @@ impl Application {
 
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
 
-        let (vertex_buffer, vertex_buffer_memory) =
-            Self::create_vertex_buffer(&instance, &device, physical_device, &VERTICES)?;
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
+            &instance,
+            &device,
+            graphics_queue,
+            physical_device,
+            &VERTICES,
+            command_pool,
+        )?;
 
         let (image_avaible_semaphores, render_done_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device)?;
@@ -978,33 +984,107 @@ impl Application {
         Ok((buffer, buffer_memory))
     }
 
+    fn copy_buffer(
+        device: &Device,
+        queue: vk::Queue,
+        src_buffer: vk::Buffer,
+        dst_buffer: vk::Buffer,
+        size: vk::DeviceSize,
+        command_pool: vk::CommandPool,
+    ) -> AppResult<()> {
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(command_pool)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info)?[0] };
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(command_buffer, &begin_info)?;
+
+            let copy_region = vk::BufferCopy::builder()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(size);
+            let copy_regions = &[copy_region.build()];
+            device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, copy_regions);
+
+            device.end_command_buffer(command_buffer)?;
+
+            let command_buffers = [command_buffer];
+            let submit_info = vk::SubmitInfo::builder().command_buffers(&command_buffers);
+            let submit_infos = [submit_info.build()];
+            device.queue_submit(queue, &submit_infos, vk::Fence::null())?;
+            device.queue_wait_idle(queue)?;
+
+            device.free_command_buffers(command_pool, &command_buffers);
+        }
+
+        Ok(())
+    }
+
     fn create_vertex_buffer(
         instance: &Instance,
         device: &Device,
+        graphic_queue: vk::Queue,
         physical_device: vk::PhysicalDevice,
         vertex_data: &[Vertex],
+        command_pool: vk::CommandPool,
     ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
         let buffer_size = (Vertex::STRIDE * VERTICES.len()) as u64;
-        let mem_proprieties =
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let (buffer, buffer_memory) = Self::create_buffer(
+
+        let staging_buffer_mem_proprieties =
+            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE;
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
             instance,
             device,
             physical_device,
             buffer_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            mem_proprieties,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            staging_buffer_mem_proprieties,
+        )?;
+        unsafe {
+            let data_src = vertex_data.as_ptr() as *const c_void;
+            let data_dst = device.map_memory(
+                staging_buffer_memory,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy(data_src, data_dst, buffer_size as usize);
+            device.unmap_memory(staging_buffer_memory);
+        };
+
+        let vertex_buffer_usage =
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER;
+        let vertex_buffer_mem_proprieties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_buffer(
+            instance,
+            device,
+            physical_device,
+            buffer_size,
+            vertex_buffer_usage,
+            vertex_buffer_mem_proprieties,
+        )?;
+
+        Self::copy_buffer(
+            device,
+            graphic_queue,
+            staging_buffer,
+            vertex_buffer,
+            buffer_size,
+            command_pool,
         )?;
 
         unsafe {
-            let data_src = vertex_data.as_ptr() as *const c_void;
-            let data_dst =
-                device.map_memory(buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy(data_src, data_dst, buffer_size as usize);
-            device.unmap_memory(buffer_memory)
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
         }
 
-        Ok((buffer, buffer_memory))
+        Ok((vertex_buffer, vertex_buffer_memory))
     }
 
     fn find_memory_type(
