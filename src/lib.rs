@@ -19,15 +19,14 @@ use winit::{event_loop::EventLoop, window::Window};
 #[cfg(feature = "vlayers")]
 use ash::extensions::ext;
 
-const VERTICES: [Vertex; 6] = [
+const VERTICES: [Vertex; 4] = [
     Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1.0, 0.0, 0.0)),
-    Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
-    Vertex::new(Vec2::new(-0.5, 0.5), Vec3::new(0.0, 0.0, 1.0)),
-    //
-    Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1.0, 0.0, 0.0)),
-    Vertex::new(Vec2::new(0.5, -0.5), Vec3::new(0.0, 0.0, 1.0)),
-    Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 1.0, 0.0)),
+    Vertex::new(Vec2::new(0.5, -0.5), Vec3::new(0.0, 1.0, 0.0)),
+    Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0.0, 0.0, 1.0)),
+    Vertex::new(Vec2::new(-0.5, 0.5), Vec3::new(1.0, 1.0, 1.0)),
 ];
+
+const INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
@@ -78,6 +77,22 @@ struct GraphicsPipelineHolder {
     pipeline_layout: vk::PipelineLayout,
 }
 
+struct BufferHolder {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+}
+
+impl BufferHolder {
+    fn new(buffer: vk::Buffer, memory: vk::DeviceMemory) -> Self {
+        Self { buffer, memory }
+    }
+
+    unsafe fn destroy_buffer(&self, device: &Device) {
+        device.destroy_buffer(self.buffer, None);
+        device.free_memory(self.memory, None);
+    }
+}
+
 #[cfg(feature = "vlayers")]
 struct DebugMessengerHolder {
     debug_util_ext: ext::DebugUtils,
@@ -100,8 +115,8 @@ pub struct Application {
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     current_frame: usize,
-    vertex_buffer: vk::Buffer,
-    vertex_buffer_memory: vk::DeviceMemory,
+    vertex_buffer: BufferHolder,
+    index_buffer: BufferHolder,
 
     image_avaible_semaphores: Vec<vk::Semaphore>,
     render_done_semaphores: Vec<vk::Semaphore>,
@@ -169,12 +184,21 @@ impl Application {
 
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
 
-        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
+        let vertex_buffer = Self::create_vertex_buffer(
             &instance,
             &device,
             graphics_queue,
             physical_device,
             &VERTICES,
+            command_pool,
+        )?;
+
+        let index_buffer = Self::create_index_buffer(
+            &instance,
+            &device,
+            graphics_queue,
+            physical_device,
+            &INDICES,
             command_pool,
         )?;
 
@@ -197,7 +221,7 @@ impl Application {
             command_buffers,
             current_frame: 0,
             vertex_buffer,
-            vertex_buffer_memory,
+            index_buffer,
 
             image_avaible_semaphores,
             render_done_semaphores,
@@ -955,7 +979,7 @@ impl Application {
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         mem_proprieties: vk::MemoryPropertyFlags,
-    ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
+    ) -> AppResult<BufferHolder> {
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(size)
             .usage(usage)
@@ -981,7 +1005,7 @@ impl Application {
             device.bind_buffer_memory(buffer, buffer_memory, 0)?;
         }
 
-        Ok((buffer, buffer_memory))
+        Ok(BufferHolder::new(buffer, buffer_memory))
     }
 
     fn copy_buffer(
@@ -1032,12 +1056,12 @@ impl Application {
         physical_device: vk::PhysicalDevice,
         vertex_data: &[Vertex],
         command_pool: vk::CommandPool,
-    ) -> AppResult<(vk::Buffer, vk::DeviceMemory)> {
+    ) -> AppResult<BufferHolder> {
         let buffer_size = (Vertex::STRIDE * VERTICES.len()) as u64;
 
         let staging_buffer_mem_proprieties =
             vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE;
-        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+        let staging_buffer = Self::create_buffer(
             instance,
             device,
             physical_device,
@@ -1048,20 +1072,20 @@ impl Application {
         unsafe {
             let data_src = vertex_data.as_ptr() as *const c_void;
             let data_dst = device.map_memory(
-                staging_buffer_memory,
+                staging_buffer.memory,
                 0,
                 buffer_size,
                 vk::MemoryMapFlags::empty(),
             )?;
             std::ptr::copy(data_src, data_dst, buffer_size as usize);
-            device.unmap_memory(staging_buffer_memory);
+            device.unmap_memory(staging_buffer.memory);
         };
 
         let vertex_buffer_usage =
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER;
         let vertex_buffer_mem_proprieties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
-        let (vertex_buffer, vertex_buffer_memory) = Self::create_buffer(
+        let vertex_buffer = Self::create_buffer(
             instance,
             device,
             physical_device,
@@ -1073,18 +1097,78 @@ impl Application {
         Self::copy_buffer(
             device,
             graphic_queue,
-            staging_buffer,
-            vertex_buffer,
+            staging_buffer.buffer,
+            vertex_buffer.buffer,
             buffer_size,
             command_pool,
         )?;
 
         unsafe {
-            device.destroy_buffer(staging_buffer, None);
-            device.free_memory(staging_buffer_memory, None);
+            staging_buffer.destroy_buffer(device);
         }
 
-        Ok((vertex_buffer, vertex_buffer_memory))
+        Ok(vertex_buffer)
+    }
+
+    fn create_index_buffer(
+        instance: &Instance,
+        device: &Device,
+        graphic_queue: vk::Queue,
+        physical_device: vk::PhysicalDevice,
+        index_data: &[u16],
+        command_pool: vk::CommandPool,
+    ) -> AppResult<BufferHolder> {
+        let buffer_size = std::mem::size_of_val(index_data) as u64;
+
+        let staging_buffer_mem_proprieties =
+            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE;
+        let staging_buffer = Self::create_buffer(
+            instance,
+            device,
+            physical_device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            staging_buffer_mem_proprieties,
+        )?;
+        unsafe {
+            let data_src = index_data.as_ptr() as *const c_void;
+            let data_dst = device.map_memory(
+                staging_buffer.memory,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy(data_src, data_dst, buffer_size as usize);
+            device.unmap_memory(staging_buffer.memory);
+        };
+
+        let index_buffer_usage =
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER;
+        let index_buffer_mem_proprieties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+
+        let index_buffer = Self::create_buffer(
+            instance,
+            device,
+            physical_device,
+            buffer_size,
+            index_buffer_usage,
+            index_buffer_mem_proprieties,
+        )?;
+
+        Self::copy_buffer(
+            device,
+            graphic_queue,
+            staging_buffer.buffer,
+            index_buffer.buffer,
+            buffer_size,
+            command_pool,
+        )?;
+
+        unsafe {
+            staging_buffer.destroy_buffer(device);
+        }
+
+        Ok(index_buffer)
     }
 
     fn find_memory_type(
@@ -1176,16 +1260,23 @@ impl Application {
                 self.pipeline.pipeline,
             );
 
-            let vertex_buffers = &[self.vertex_buffer];
+            let vertex_buffers = &[self.vertex_buffer.buffer];
             let offsets = &[0];
             self.device
                 .cmd_bind_vertex_buffers(command_buffer, 0, vertex_buffers, offsets);
+
+            self.device.cmd_bind_index_buffer(
+                command_buffer,
+                self.index_buffer.buffer,
+                0,
+                vk::IndexType::UINT16,
+            );
 
             self.device.cmd_set_viewport(command_buffer, 0, &viewports);
             self.device.cmd_set_scissor(command_buffer, 0, &scissors);
 
             self.device
-                .cmd_draw(command_buffer, VERTICES.len() as u32, 1, 0, 0);
+                .cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
 
             self.device.cmd_end_render_pass(command_buffer);
 
@@ -1304,8 +1395,8 @@ impl Application {
 
             self.cleanup_swapchain();
 
-            self.device.destroy_buffer(self.vertex_buffer, None);
-            self.device.free_memory(self.vertex_buffer_memory, None);
+            self.vertex_buffer.destroy_buffer(&self.device);
+            self.index_buffer.destroy_buffer(&self.device);
 
             self.device.destroy_pipeline(self.pipeline.pipeline, None);
             self.device
