@@ -1,9 +1,9 @@
 mod app_error;
+#[allow(dead_code)]
 mod geometry;
 mod queue_families;
 
 use app_error::{AppError, AppErrorType};
-use cgmath::SquareMatrix;
 use geometry::*;
 use queue_families::QueueFamilyIndice;
 
