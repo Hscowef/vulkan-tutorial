@@ -17,6 +17,10 @@ fn main() {
             .output()
             .unwrap();
 
-        println!("{:?}", output);
+        if !output.stderr.is_empty() {
+            println!("############## SHADER COMPILATION FAILED ##############");
+            println!("{}", String::from_utf8(output.stderr).unwrap());
+            println!("#######################################################");
+        }
     }
 }

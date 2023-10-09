@@ -37,7 +37,7 @@ fn main() {
                 window_id,
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
 
-            _ => (),
+            _ => window.request_redraw(),
         }
 
         if let ControlFlow::Exit = *control_flow {
