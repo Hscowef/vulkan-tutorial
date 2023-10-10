@@ -37,11 +37,13 @@ fn main() {
                 window_id,
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
 
-            _ => window.request_redraw(),
+            _ => (),
         }
 
         if let ControlFlow::Exit = *control_flow {
             application.cleanup();
         }
+
+        window.request_redraw();
     });
 }
