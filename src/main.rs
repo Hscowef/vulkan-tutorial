@@ -22,7 +22,7 @@ fn main() {
     let mut application = Application::create(&event_loop, &window).unwrap();
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
 
         match event {
             Event::WindowEvent {
