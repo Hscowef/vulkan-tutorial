@@ -1,49 +1,62 @@
 use vulkan_tutorial::Application;
 
 use winit::{
-    dpi::LogicalSize,
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId},
 };
 
 const NAME: &str = "Vulkan tutorial";
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
-fn main() {
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title(NAME)
-        .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
-        .build(&event_loop)
-        .unwrap();
+#[derive(Default)]
+struct App {
+    window: Option<Window>,
+    application: Option<Application>,
+}
 
-    let mut application = Application::create(&event_loop, &window).unwrap();
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
+        let window_attributes = Window::default_attributes()
+            .with_title(NAME)
+            .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT));
 
+        let window = event_loop.create_window(window_attributes).unwrap();
+        let application = Application::create(event_loop, &window).unwrap();
+
+        self.window = Some(window);
+        self.application = Some(application);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let application = self.application.as_mut().unwrap();
         match event {
-            Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                window_id,
-            } if window_id == window.id() => application.request_resize(),
-            Event::RedrawRequested(window_id) if window_id == window.id() => {
-                application.draw_frame().unwrap();
+            WindowEvent::CloseRequested => {
+                println!("The close button was pressed; stopping");
+                event_loop.exit();
             }
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                window_id,
-            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
 
+            WindowEvent::Resized(_) => application.request_resize(),
+
+            WindowEvent::RedrawRequested => {
+                application.draw_frame().unwrap();
+                self.window.as_ref().unwrap().request_redraw();
+            }
             _ => (),
         }
+    }
+}
 
-        if let ControlFlow::Exit = *control_flow {
-            application.cleanup();
-        }
+fn main() {
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.set_control_flow(ControlFlow::Poll);
 
-        window.request_redraw();
-    });
+    let mut app = App::default();
+    event_loop.run_app(&mut app).unwrap();
 }

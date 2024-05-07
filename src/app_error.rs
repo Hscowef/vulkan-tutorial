@@ -1,4 +1,5 @@
 use ash::vk;
+use raw_window_handle::HandleError;
 
 #[derive(Debug, Clone)]
 pub struct AppError {
@@ -22,12 +23,16 @@ pub enum AppErrorType {
     VulkanLoadingError,
     NoSuitableDevice,
     NoSuitableMemType,
+    IoError,
+    HandleError,
 }
 
 impl AppErrorType {
     const MSG_VULKAN_LOADING_ERROR: &'static str = "Couldn't load the Vulkan library.";
     const MSG_NO_SUITABLE_DEVICE: &'static str = "No suitable physical device is avaible.";
     const MSG_NO_SUITABLE_MEM_TYPE: &'static str = "Failed to find suitable memory type.";
+    const MSG_IO_ERROR: &'static str = "An io error occured.";
+    const MSG_HANDLE_ERROR: &'static str = "An error occured while retreiving an handle.";
 }
 
 impl AppError {
@@ -39,6 +44,8 @@ impl AppError {
             }
             AppErrorType::NoSuitableDevice => String::from(AppErrorType::MSG_NO_SUITABLE_DEVICE),
             AppErrorType::NoSuitableMemType => String::from(AppErrorType::MSG_NO_SUITABLE_MEM_TYPE),
+            AppErrorType::IoError => String::from(AppErrorType::MSG_IO_ERROR),
+            AppErrorType::HandleError => String::from(AppErrorType::MSG_HANDLE_ERROR),
         };
 
         Self {
@@ -52,6 +59,33 @@ impl From<vk::Result> for AppError {
     fn from(value: vk::Result) -> Self {
         AppError {
             error_type: AppErrorType::VulkanError(value),
+            message: value.to_string(),
+        }
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        AppError {
+            error_type: AppErrorType::IoError,
+            message: value.to_string(),
+        }
+    }
+}
+
+impl From<image::ImageError> for AppError {
+    fn from(value: image::ImageError) -> Self {
+        AppError {
+            error_type: AppErrorType::IoError,
+            message: value.to_string(),
+        }
+    }
+}
+
+impl From<HandleError> for AppError {
+    fn from(value: HandleError) -> Self {
+        AppError {
+            error_type: AppErrorType::HandleError,
             message: value.to_string(),
         }
     }

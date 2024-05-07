@@ -29,18 +29,20 @@ impl ModelViewProj {
 pub struct Vertex {
     position: Vec2,
     color: Vec3,
+    uv: Vec2,
 }
 
 impl Vertex {
     pub const STRIDE: usize = mem::size_of::<Self>();
 
-    pub const BINDING_DESCRIPTIONS: &[vk::VertexInputBindingDescription] =
+    pub const BINDING_DESCRIPTIONS: &'static [vk::VertexInputBindingDescription] =
         &[vk::VertexInputBindingDescription {
             binding: 0,
             stride: Self::STRIDE as u32,
             input_rate: vk::VertexInputRate::VERTEX,
         }];
-    pub const ATTRIBUTE_DESCRIPTIONS: &[vk::VertexInputAttributeDescription] = &[
+
+    pub const ATTRIBUTE_DESCRIPTIONS: &'static [vk::VertexInputAttributeDescription] = &[
         vk::VertexInputAttributeDescription {
             binding: 0,
             location: 0,
@@ -53,14 +55,28 @@ impl Vertex {
             format: vk::Format::R32G32B32_SFLOAT,
             offset: mem::size_of::<Vec2>() as u32,
         },
+        vk::VertexInputAttributeDescription {
+            binding: 0,
+            location: 2,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: mem::size_of::<Vec2>() as u32 + mem::size_of::<Vec3>() as u32,
+        },
     ];
 
-    pub const fn new(position: Vec2, color: Vec3) -> Self {
-        Self { position, color }
+    pub const fn new(position: Vec2, color: Vec3, uv: Vec2) -> Self {
+        Self {
+            position,
+            color,
+            uv,
+        }
     }
 
     #[allow(dead_code)]
     pub const fn zero() -> Self {
-        Self::new(Vec2::new(0.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
+        Self::new(
+            Vec2::new(0.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec2::new(0.0, 0.0),
+        )
     }
 }
